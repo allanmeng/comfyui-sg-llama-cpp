@@ -1,9 +1,8 @@
 [中文](README_CN.md) | English
 
-# comfyui-sg-llama-cpp
+# comfyui-sg-llama-cpp (Intel GPU SYCL Accelerated)
 
-ComfyUI custom node that acts as a llama-cpp-python wrapper, with support for vision models. It
-allows the user to generate text responses from prompts using llama.cpp.
+ComfyUI custom node that acts as a llama-cpp-python wrapper, **specifically optimized for Intel GPU (Arc / Iris Xe) with SYCL backend acceleration**. Supports vision models and allows generating text responses from prompts using llama.cpp.
 
 ![Screenshot](assets/node_preview.png)
 
@@ -19,10 +18,13 @@ allows the user to generate text responses from prompts using llama.cpp.
 
 ## Installation
 
-1. Install the required dependency/wheel from:
-   ```
-   https://github.com/JamePeng/llama-cpp-python/releases
-   ```
+1. Install the SYCL-accelerated llama-cpp-python wheel.
+
+   > **Important**: JamePeng's releases do **not** include SYCL builds. For Intel GPU SYCL acceleration, download the whl from:
+   > ```
+   > https://github.com/allanmeng/llama-cpp-python-sycl-windows
+   > ```
+   > If you don't need SYCL (e.g., using CUDA/CPU), you can use the generic builds from https://github.com/JamePeng/llama-cpp-python/releases
 
 2. Clone this repository into your ComfyUI custom nodes directory:
    ```bash
@@ -30,7 +32,12 @@ allows the user to generate text responses from prompts using llama.cpp.
    git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
    ```
 
-3. Restart ComfyUI.
+3. **For SYCL users only**: After installing the whl, delete the `bin/` directory to prevent DLL split-loading crashes:
+   ```bat
+   rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
+   ```
+
+4. Restart ComfyUI.
 
 ## What's New (0.3.39+ Adaptation)
 
@@ -164,8 +171,10 @@ By default, the node loads GGUF models from ComfyUI's `text_encoders` folder. Yo
 
 ## Requirements
 
-- llama-cpp-python >= 0.3.39 (from https://github.com/JamePeng/llama-cpp-python, make sure to install the right version for your hardware and torch/cuda version)
-- For Intel Arc GPU (SYCL) users: delete `llama_cpp/bin/` after installation (see SYCL Environment Note above)
+- llama-cpp-python >= 0.3.39
+  - **Intel GPU (SYCL)**: https://github.com/allanmeng/llama-cpp-python-sycl-windows
+  - **Other backends (CUDA/CPU)**: https://github.com/JamePeng/llama-cpp-python/releases
+- After SYCL installation: delete `llama_cpp/bin/` (see Installation step 3 above)
 
 ## License
 
@@ -173,5 +182,6 @@ This project is licensed under the GNU AGPLv3 License - see the [LICENSE](LICENS
 
 ## Repository
 
-- **Fork**: https://github.com/allanmeng/comfyui-sg-llama-cpp
+- **Fork (SYCL optimized)**: https://github.com/allanmeng/comfyui-sg-llama-cpp
+- **SYCL whl builds**: https://github.com/allanmeng/llama-cpp-python-sycl-windows
 - **Upstream**: https://github.com/sebagallo/comfyui-sg-llama-cpp
