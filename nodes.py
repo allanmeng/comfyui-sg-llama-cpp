@@ -12,6 +12,14 @@ except ImportError:
     # Support for older llama-cpp-python versions
     from llama_cpp.llama_chat_format import Llava15ChatHandler
     MTMDChatHandler = Llava15ChatHandler
+
+# In llama-cpp-python >= 0.3.39, Llama() uses GenericMTMDChatHandler internally
+# for vision models. We inspect it to filter chat_handler_kwargs properly.
+try:
+    from llama_cpp.llama_chat_format import GenericMTMDChatHandler as _VisionHandlerBase
+except ImportError:
+    _VisionHandlerBase = MTMDChatHandler
+
 import folder_paths
 from comfy_api.latest import io
 from typing import Dict, Any, List
@@ -245,12 +253,10 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Boolean.Input("use_mlock", default=False, tooltip="Enable lock for memory-mapped files", optional=True),
                 io.Boolean.Input("use_direct_io", default=False, tooltip="Enable direct I/O for library (Linux only)", optional=True),
                 io.Boolean.Input("verbose", default=False, tooltip="Enable verbose logging", optional=True),
+                io.Int.Input("ctx_checkpoints", default=0, min=-1, max=1024, tooltip="Context checkpoints (-1 for default, 0 to disable; required for hybrid models like Qwen3.5)", optional=True),
                 io.Boolean.Input("vision_use_gpu", default=True, tooltip="Vision: Enable GPU for vision handler", optional=True),
-                io.Int.Input("vision_image_min_tokens", default=-1, min=-1, max=16384, tooltip="Vision: Minimum image tokens (-1 for default)", optional=True),
+                io.Int.Input("vision_image_min_tokens", default=1024, min=-1, max=16384, tooltip="Vision: Minimum image tokens (1024+ recommended for Qwen-VL, -1 for default)", optional=True),
                 io.Int.Input("vision_image_max_tokens", default=-1, min=-1, max=16384, tooltip="Vision: Maximum image tokens (-1 for default)", optional=True),
-                io.Boolean.Input("vision_enable_thinking", default=False, tooltip="Vision: Enable thinking", optional=True),
-                io.Boolean.Input("vision_force_reasoning", default=False, tooltip="Vision: Force reasoning", optional=True),
-                io.Boolean.Input("vision_add_vision_id", default=True, tooltip="Vision: Add vision ID", optional=True),
             ],
             outputs=[
                 io.Custom("LLAMA_OPTIONS").Output(display_name="OPTIONS")
@@ -362,34 +368,32 @@ class LlamaCPPEngine(io.ComfyNode):
                         continue
                     llama_kwargs[k] = v
 
-            # Handle vision models: use chat_handler based on chat_format
+            # Handle vision models: pass mmproj_path to Llama() and let it
+            # create the chat handler internally (required by llama-cpp-python >= 0.3.39)
             if vision_enabled:
-                handler_class = VISION_HANDLERS.get(chat_format, MTMDChatHandler)
-                
-                # Dynamically get parameters from the base class and actual class (MTMDChatHandler)
-                base_sig = inspect.signature(MTMDChatHandler)
-                handler_params = set(base_sig.parameters.keys())
-                handler_sig = inspect.signature(handler_class)
-                handler_params.update(handler_sig.parameters.keys())
-                
-                handler_kwargs = {
-                    "clip_model_path": model["mmproj_model_path"],
-                    "verbose": options.get("verbose", False),
-                }
+                llama_kwargs["mmproj_path"] = model["mmproj_model_path"]
 
-                # Process vision_ prefixed options
+                # Collect vision_ prefixed options into chat_handler_kwargs.
+                # Llama() creates GenericMTMDChatHandler (0.3.39+) internally, which
+                # forwards **kwargs to MTMDChatHandler.__init__. MTMDChatHandler
+                # raises TypeError for any unrecognized kwargs, so we must filter
+                # against the union of both classes' explicit params.
+                accepted_params = set(inspect.signature(_VisionHandlerBase).parameters.keys())
+                accepted_params |= set(inspect.signature(MTMDChatHandler).parameters.keys())
+                accepted_params -= {"self", "kwargs"}
+
+                chat_handler_kwargs = {}
                 for k, v in options.items():
                     if k.startswith("vision_"):
                         param_name = k.replace("vision_", "")
-                        if param_name in handler_params:
-                            # Skip -1 values for vision handlers
+                        if param_name in accepted_params:
+                            # Skip -1 values (use handler defaults)
                             if v == -1:
                                 continue
-                            handler_kwargs[param_name] = v
+                            chat_handler_kwargs[param_name] = v
 
-                chat_handler = handler_class(**handler_kwargs)
-                llama_kwargs["chat_handler"] = chat_handler
-                # Remove chat_format when using vision handler
+                llama_kwargs["chat_handler_kwargs"] = chat_handler_kwargs
+                # Let Llama() auto-detect chat_format for vision models
                 llama_kwargs.pop("chat_format", None)
 
             # Pre-generation LLM management

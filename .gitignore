@@ -1,3 +1,19 @@
 __pycache__
+*.pyc
 .idea/
+
+# User-specific config
 config.json
+
+# Test / debug files
+test_*.py
+run_test_debug.bat
+crash_log_*.txt
+error_*.txt
+prestartup_script.py.bak
+
+# Issue drafts (internal working docs)
+ISSUE_*.md
+
+# WorkBuddy workspace data
+.workbuddy/
