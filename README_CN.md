@@ -1,3 +1,5 @@
+中文 | [English](README.md)
+
 # comfyui-sg-llama-cpp
 
 ComfyUI 自定义节点，llama-cpp-python 的封装插件，支持视觉模型。通过 llama.cpp 从提示词生成文本响应。

@@ -1,3 +1,5 @@
+[中文](README_CN.md) | English
+
 # comfyui-sg-llama-cpp
 
 ComfyUI custom node that acts as a llama-cpp-python wrapper, with support for vision models. It
