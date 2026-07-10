@@ -12,6 +12,8 @@ allows the user to generate text responses from prompts using llama.cpp.
 - JSON Schema support for structured output (json_object)
 - Memory management options
 - Integration with ComfyUI workflows
+- **llama-cpp-python 0.3.39+ MTMD rewrite support** (GenericMTMDChatHandler)
+- **Hybrid model support** (Qwen3.5 etc. via `ctx_checkpoints`)
 
 ## Installation
 
@@ -23,10 +25,32 @@ allows the user to generate text responses from prompts using llama.cpp.
 2. Clone this repository into your ComfyUI custom nodes directory:
    ```bash
    cd ComfyUI/custom_nodes
-   git clone https://github.com/sebagallo/comfyui-sg-llama-cpp
+   git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
    ```
 
 3. Restart ComfyUI.
+
+## What's New (0.3.39+ Adaptation)
+
+This fork adapts the plugin for **llama-cpp-python 0.3.39+**, which introduced a major MTMD (Multi-Modal Token Decomposition) rewrite:
+
+- **`clip_model_path` deprecated** → replaced by `mmproj_path` passed directly to `Llama()`
+- **Manual handler creation removed** → `Llama()` now internally creates the vision handler via `chat_handler_kwargs`
+- **`GenericMTMDChatHandler`** replaces model-specific handlers as the primary vision handler
+- **Parameter filtering** inspects `GenericMTMDChatHandler` union `MTMDChatHandler` to filter valid kwargs
+- **`ctx_checkpoints` option** added (default `0`, required for hybrid models like Qwen3.5 Transformer+Mamba)
+- **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id` (not accepted by `GenericMTMDChatHandler`)
+- **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
+
+### SYCL Environment Note (Windows)
+
+If you are using an **Intel Arc GPU with SYCL backend**, after installing llama-cpp-python you must delete the `bin/` directory to prevent DLL split-loading crashes:
+
+```bat
+rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
+```
+
+The `bin/` directory contains a subset of DLLs (7 of 14) that causes Windows DLL loader to mix load paths, leading to SYCL runtime initialization conflicts (access violation). The `lib/` directory has the complete set. See [ISSUE_JAMEPENG.md](ISSUE_JAMEPENG.md) for full analysis.
 
 ## Node Reference
 
@@ -37,7 +61,7 @@ Loads GGUF model files and prepares them for use.
 - **Required**:
   - `model_name`: Select the GGUF model file to load.
 - **Optional**:
-  - `chat_format`: Chat template to use (default: `llama-2`).
+  - `chat_format`: Chat template to use (default: `llama-2`). In 0.3.39+, vision models auto-detect via `GenericMTMDChatHandler`.
   - `mmproj_model_name`: Multi-modal projector model for vision (default: `None`).
 
 **Outputs**
@@ -61,12 +85,10 @@ Configures advanced parameters for the model.
   - `use_mlock`: Memory locking (default: `Disabled`).
   - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`).
   - `verbose`: Verbose logging (default: `Disabled`).
+  - `ctx_checkpoints`: Context checkpoints (default: `0` to disable; `-1` for default; **required for hybrid models like Qwen3.5**).
   - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
-  - `vision_image_min_tokens`: Minimum image tokens (default: `-1`).
-  - `vision_image_max_tokens`: Maximum image tokens (default: `-1`).
-  - `vision_enable_thinking`: Enable thinking mode for GLMV models (default: `Disabled`).
-  - `vision_force_reasoning`: Force reasoning for QwenVL models (default: `Disabled`).
-  - `vision_add_vision_id`: Add vision ID for QwenVL models (default: `Enabled`).
+  - `vision_image_min_tokens`: Minimum image tokens (default: `1024`, recommended for Qwen-VL; `-1` for default).
+  - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default).
 
 **Outputs**
 - `OPTIONS`: A configuration dictionary.
@@ -93,7 +115,7 @@ The main generation node.
   - `repeat_penalty`: Penalty for repetition (default: `1.1`).
   - `present_penalty`: Penalty for presence of tokens (default: `0.0`).
   - `frequency_penalty`: Penalty for frequency of tokens (default: `0.0`).
-  - `seed`: Random seed (default: `-1`).
+  - `seed`: Random seed (default: `1`).
 
 **Outputs**
 - `RESPONSE`: The generated text.
@@ -140,7 +162,8 @@ By default, the node loads GGUF models from ComfyUI's `text_encoders` folder. Yo
 
 ## Requirements
 
-- llama-cpp-python (from https://github.com/JamePeng/llama-cpp-python, make sure to install the right version for your hardware and torch/cuda version)
+- llama-cpp-python >= 0.3.39 (from https://github.com/JamePeng/llama-cpp-python, make sure to install the right version for your hardware and torch/cuda version)
+- For Intel Arc GPU (SYCL) users: delete `llama_cpp/bin/` after installation (see SYCL Environment Note above)
 
 ## License
 
@@ -148,4 +171,5 @@ This project is licensed under the GNU AGPLv3 License - see the [LICENSE](LICENS
 
 ## Repository
 
-https://github.com/sebagallo/comfyui-sg-llama-cpp
+- **Fork**: https://github.com/allanmeng/comfyui-sg-llama-cpp
+- **Upstream**: https://github.com/sebagallo/comfyui-sg-llama-cpp
