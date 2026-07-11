@@ -32,12 +32,7 @@ ComfyUI custom node that acts as a llama-cpp-python wrapper, **specifically opti
    git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
    ```
 
-3. **For SYCL users only**: After installing the whl, delete the `bin/` directory to prevent DLL split-loading crashes:
-   ```bat
-   rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
-   ```
-
-4. Restart ComfyUI.
+3. Restart ComfyUI.
 
 ### Upgrading from 0.3.38 or Earlier
 
@@ -49,12 +44,9 @@ pip uninstall llama-cpp-python -y
 
 # 2. Install the new wheel
 pip install llama_cpp_python-0.3.41-<your-build>.whl
-
-# 3. Delete the bin/ directory (SYCL users only)
-rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
 ```
 
-> **Why uninstall first?** Starting from 0.3.39, the wheel includes a `bin/` directory that did not exist in earlier versions. A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which combined with the new `bin/` can cause DLL split-loading crashes (access violation) on SYCL backends.
+> **Why uninstall first?** A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which can conflict with the new version's files. Uninstalling first ensures a clean state.
 
 ## What's New (0.3.39+ Adaptation)
 
@@ -67,16 +59,6 @@ This fork adapts the plugin for **llama-cpp-python 0.3.39+**, which introduced a
 - **`ctx_checkpoints` option** added (default `0`, required for hybrid models like Qwen3.5 Transformer+Mamba)
 - **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id` (not accepted by `GenericMTMDChatHandler`)
 - **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
-
-### SYCL Environment Note (Windows)
-
-If you are using an **Intel Arc GPU with SYCL backend**, after installing llama-cpp-python you must delete the `bin/` directory to prevent DLL split-loading crashes:
-
-```bat
-rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
-```
-
-The `bin/` directory contains a subset of DLLs (7 of 14) that causes Windows DLL loader to mix load paths, leading to SYCL runtime initialization conflicts (access violation). The `lib/` directory has the complete set. See [ISSUE_JAMEPENG.md](ISSUE_JAMEPENG.md) for full analysis.
 
 ## Node Reference
 
@@ -210,8 +192,6 @@ Create `config.json` in the plugin directory for additional search paths:
 - llama-cpp-python >= 0.3.39
   - **Intel GPU (SYCL)**: https://github.com/allanmeng/llama-cpp-python-sycl-windows
   - **Other backends (CUDA/CPU)**: https://github.com/JamePeng/llama-cpp-python/releases
-- After SYCL installation: delete `llama_cpp/bin/` (see Installation step 3 above)
-
 ## License
 
 This project is licensed under the GNU AGPLv3 License - see the [LICENSE](LICENSE) file for details.
