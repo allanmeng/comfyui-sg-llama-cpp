@@ -42,30 +42,49 @@ def get_user_model_folders() -> List[str]:
     return config.get('model_folders', [])
 
 def get_merged_model_folders() -> List[str]:
-    """Merge ComfyUI text_encoders folders with user folders."""
+    """Merge ComfyUI text_encoders folders, auto-detected LLM folder, and user folders."""
     try:
         comfy_folders = folder_paths.get_folder_paths("text_encoders")
+        # Auto-detect ComfyUI\models\LLM\ folder
+        llm_folder = os.path.join(folder_paths.models_dir, "LLM")
     except:
         comfy_folders = []
+        llm_folder = None
+
     user_folders = get_user_model_folders()
     all_folders = comfy_folders + user_folders
+
+    # Add auto-detected LLM folder if it exists and not already in the list
+    if llm_folder and os.path.exists(llm_folder) and llm_folder not in all_folders:
+        all_folders.append(llm_folder)
+
     # Filter out non-existent paths
     return [f for f in all_folders if os.path.exists(f)]
 
 def scan_gguf_models_in_folders() -> List[str]:
-    """Scan merged folders for GGUF model files."""
+    """Scan merged folders recursively for GGUF model files. Returns relative paths (e.g. 'GGUF/model.gguf')."""
     folders = get_merged_model_folders()
     model_list = []
+    seen = set()
     for folder in folders:
         try:
-            files = os.listdir(folder)
-            model_list.extend([f for f in files if f.lower().endswith('.gguf')])
+            for root, dirs, files in os.walk(folder):
+                # Skip hidden directories (e.g. .cache)
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                rel_dir = os.path.relpath(root, folder)
+                for f in files:
+                    if f.lower().endswith('.gguf'):
+                        # Build relative path from the base folder
+                        rel_path = f if rel_dir == '.' else os.path.join(rel_dir, f)
+                        if rel_path not in seen:
+                            model_list.append(rel_path)
+                            seen.add(rel_path)
         except:
             pass  # Skip inaccessible folders
     return model_list
 
 def find_model_path(model_name: str) -> str:
-    """Find full path to model in merged folders."""
+    """Find full path to model in merged folders. Handles relative paths from recursive scan."""
     folders = get_merged_model_folders()
     for folder in folders:
         path = os.path.join(folder, model_name)
