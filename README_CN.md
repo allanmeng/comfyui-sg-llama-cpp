@@ -141,32 +141,51 @@ rmdir /s /q "你的Python路径\Lib\site-packages\llama_cpp\bin"
 **输出**
 - `PASSTHROUGH`：原样透传的输入。
 
-## 自定义模型文件夹
+## 模型目录规则
 
-默认情况下，节点从 ComfyUI 的 `text_encoders` 文件夹加载 GGUF 模型。你可以通过在插件目录中创建 `config.json` 文件来指定额外的模型文件夹。
+插件会**递归扫描**以下目录中的 `.gguf` 文件（包括子目录）：
 
-### 配置方法
+| 来源 | 路径 | 自动检测 |
+|------|------|:---:|
+| ComfyUI `text_encoders` | `ComfyUI/models/text_encoders/` + `ComfyUI/models/clip/` | 是 |
+| 专属 LLM 目录 | `ComfyUI/models/LLM/` | 是 |
+| 自定义目录 | `config.json` 中指定的任意路径 | 否 |
 
-1. 在与本 README 相同的目录下创建名为 `config.json` 的文件
-2. 按以下 JSON 格式添加你的自定义模型文件夹：
+所有扫描到的文件会按文件名自动分离到两个下拉菜单：
+- **模型下拉菜单**：`.gguf` 文件（排除文件名含 `mmproj` 的文件）
+- **mmproj 下拉菜单**：文件名含 `mmproj` 的 `.gguf` 文件
+
+### 推荐目录结构
+
+```
+ComfyUI/models/LLM/
+├── Qwen3.5-4B-Q4_K_M.gguf          ← LLM 模型
+├── Qwen2.5-VL-3B-instruct-q4_k_m.gguf
+├── mmproj/                          ← 视觉投影文件（任意名称均可）
+│   └── Qwen2.5-VL-3B-Instruct-mmproj-f16.gguf
+└── GGUF/                            ← 可自由使用子目录
+    └── ...
+```
+
+`mmproj` 文件只要文件名包含 "mmproj" 关键词就会出现在 mmproj 下拉菜单中，存放位置不限。
+
+### 自定义目录（config.json）
+
+在插件目录下创建 `config.json` 可添加额外搜索路径：
 
 ```json
 {
   "model_folders": [
-    "C:\\Users\\你的用户名\\models",
     "D:\\AI\\LLM\\models",
     "/home/user/models"
   ]
 }
 ```
 
-### 注意事项
-
-- `config.json` 是**可选的** — 没有它节点也能正常工作
+- `config.json` 是**可选的** — 没有也能正常工作
 - 路径可以是绝对路径或相对路径
-- 同时支持 Windows（`C:\`）和 Unix（`/`）风格路径
+- 同时支持 Windows 和 Unix 风格路径
 - 不存在的路径会自动过滤
-- 所有文件夹（ComfyUI 的 `text_encoders` + 你的自定义文件夹）中的模型都会出现在模型选择下拉菜单中
 - 参见 `config.example.json` 获取更多示例
 
 ## 依赖要求

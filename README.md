@@ -141,32 +141,51 @@ Utility to manually free resources.
 **Outputs**
 - `PASSTHROUGH`: The input passed through unmodified.
 
-## Custom Model Folders
+## Model Directory Rules
 
-By default, the node loads GGUF models from ComfyUI's `text_encoders` folder. You can optionally specify additional folders to load models from by creating a `config.json` file in the custom nodes directory.
+The plugin scans the following directories for `.gguf` files **recursively** (including subdirectories):
 
-### Configuration
+| Source | Path(s) | Auto-detected |
+|--------|---------|:---:|
+| ComfyUI `text_encoders` | `ComfyUI/models/text_encoders/` + `ComfyUI/models/clip/` | Yes |
+| Dedicated LLM folder | `ComfyUI/models/LLM/` | Yes |
+| Custom folders | Any path in `config.json` | No |
 
-1. Create a file named `config.json` in the same directory as this README
-2. Add your custom model folders in the following JSON format:
+All scanned files are automatically separated into two dropdowns by filename:
+- **Model dropdown**: `.gguf` files (excluding those with `mmproj` in the name)
+- **mmproj dropdown**: `.gguf` files with `mmproj` in the filename
+
+### Recommended Layout
+
+```
+ComfyUI/models/LLM/
+├── Qwen3.5-4B-Q4_K_M.gguf          ← LLM model
+├── Qwen2.5-VL-3B-instruct-q4_k_m.gguf
+├── mmproj/                          ← Vision projectors (or any name)
+│   └── Qwen2.5-VL-3B-Instruct-mmproj-f16.gguf
+└── GGUF/                            ← Can use subdirectories freely
+    └── ...
+```
+
+`mmproj` files only need the keyword "mmproj" in their filename to appear in the mmproj dropdown — their folder location doesn't matter.
+
+### Custom Folders (config.json)
+
+Create `config.json` in the plugin directory for additional search paths:
 
 ```json
 {
   "model_folders": [
-    "C:\\Users\\YourUsername\\models",
     "D:\\AI\\LLM\\models",
     "/home/user/models"
   ]
 }
 ```
 
-### Notes
-
-- The `config.json` file is **optional** - the node works without it
+- The `config.json` file is **optional** — the node works without it
 - Paths can be absolute or relative
-- Both Windows (`C:\`) and Unix (`/`) style paths are supported
+- Both Windows and Unix style paths are supported
 - Non-existent paths are automatically filtered out
-- Models from all folders (ComfyUI's `text_encoders` + your custom folders) will appear in the model selection dropdown
 - See `config.example.json` for additional examples
 
 ## Requirements
