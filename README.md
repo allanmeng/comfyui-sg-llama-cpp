@@ -39,6 +39,23 @@ ComfyUI custom node that acts as a llama-cpp-python wrapper, **specifically opti
 
 4. Restart ComfyUI.
 
+### Upgrading from 0.3.38 or Earlier
+
+If you are upgrading llama-cpp-python from version **0.3.38 or earlier** to **0.3.39+**, do NOT use `pip install --upgrade` — old files may linger and cause conflicts. Follow this procedure instead:
+
+```bat
+# 1. Completely remove the old version
+pip uninstall llama-cpp-python -y
+
+# 2. Install the new wheel
+pip install llama_cpp_python-0.3.41-<your-build>.whl
+
+# 3. Delete the bin/ directory (SYCL users only)
+rmdir /s /q "your-python-path\Lib\site-packages\llama_cpp\bin"
+```
+
+> **Why uninstall first?** Starting from 0.3.39, the wheel includes a `bin/` directory that did not exist in earlier versions. A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which combined with the new `bin/` can cause DLL split-loading crashes (access violation) on SYCL backends.
+
 ## What's New (0.3.39+ Adaptation)
 
 This fork adapts the plugin for **llama-cpp-python 0.3.39+**, which introduced a major MTMD (Multi-Modal Token Decomposition) rewrite:
