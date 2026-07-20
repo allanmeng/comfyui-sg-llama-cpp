@@ -412,6 +412,9 @@ class LlamaCPPEngine(io.ComfyNode):
                             chat_handler_kwargs[param_name] = v
 
                 llama_kwargs["chat_handler_kwargs"] = chat_handler_kwargs
+                # Mirror Options' verbose setting into the vision chat handler
+                if "verbose" in options:
+                    chat_handler_kwargs.setdefault("verbose", options["verbose"])
                 # Let Llama() auto-detect chat_format for vision models
                 llama_kwargs.pop("chat_format", None)
 
