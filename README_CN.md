@@ -20,7 +20,7 @@ ComfyUI 自定义节点，llama-cpp-python 的封装插件，**专为 Intel GPU�
 
 1. 安装 SYCL 加速版 llama-cpp-python whl 包。
 
-   > **重要**：JamePeng 的 Release 中**不包含** SYCL 构建。Intel GPU SYCL 加速请从以下地址下载 whl：
+   > **重要**：JamePeng 的 Release 中**不包含** SYCL 构建。Intel GPU SYCL 加速请从以下地址下载 whl（**已更新至 0.3.45**，内置 SYCL 单设备同步修复，无需手动打补丁）：
    > ```
    > https://github.com/allanmeng/llama-cpp-python-sycl-windows
    > ```
@@ -47,6 +47,14 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 ```
 
 > **为什么要先卸载？** 直接用 `--upgrade` 可能留下旧版 `lib/` 中的残留 DLL，与新版本文件冲突。先卸载能确保干净安装。
+
+### 更新到 0.3.45
+
+**推荐升级到 llama-cpp-python 0.3.45**——该版本底层 llama.cpp 已集成 SYCL 单设备同步修复（ggml-org/llama.cpp PR #25741），解决了此前 Qwen3.5 等模型 SYCL 后端的乱码输出问题，**无需再手动打补丁**。同时包含 Windows DLL 加载守卫修复和重构后的 Embeddings API。
+
+> **插件兼容性**：本插件对 0.3.39 ~ 0.3.45 全版本自适应（运行时检测 `load_mode` 支持情况），旧 whl 用户无需升级插件即可继续使用。
+
+> **`use_mmap`/`use_mlock`/`use_direct_io` 已弃用**（0.3.45+ 会打印弃用警告，未来版本可能移除）。插件已改用 `load_mode` 下拉框替代这三个参数；在旧版 whl 上插件会自动翻译回旧参数，行为一致。
 
 ## 更新内容（0.3.39+ 适配）
 
@@ -89,9 +97,12 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `main_gpu`：主 GPU ID（默认：`0`）。
   - `offload_kqv`：将 K/Q/V 卸载到 GPU（默认：`启用`）。
   - `numa`：NUMA 支持（默认：`禁用`）。
-  - `use_mmap`：内存映射（默认：`启用`）。
-  - `use_mlock`：内存锁定（默认：`禁用`）。
-  - `use_direct_io`：直接 I/O（仅 Linux，默认：`禁用`）。
+  - `load_mode`：模型加载模式（默认：`mmap`，替代已弃用的 `use_mmap`/`use_mlock`/`use_direct_io`）。
+    - `mmap`：内存映射（等价于旧 `use_mmap=True`）。
+    - `none`：无特殊加载模式。
+    - `mlock`：锁定内存驻留（等价于旧 `use_mlock=True`）。
+    - `mmap_mlock`：内存映射 + 锁定。
+    - `direct_io`：直接 I/O（仅 Linux）。
   - `verbose`：详细日志（默认：`禁用`）。
   - `ctx_checkpoints`：上下文检查点（默认：`0` 禁用；`-1` 使用默认值；**混合架构模型如 Qwen3.5 必须设置**）。
   - `vision_use_gpu`：视觉 handler 启用 GPU（默认：`启用`）。

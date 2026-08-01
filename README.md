@@ -20,7 +20,7 @@ ComfyUI custom node that acts as a llama-cpp-python wrapper, **specifically opti
 
 1. Install the SYCL-accelerated llama-cpp-python wheel.
 
-   > **Important**: JamePeng's releases do **not** include SYCL builds. For Intel GPU SYCL acceleration, download the whl from:
+   > **Important**: JamePeng's releases do **not** include SYCL builds. For Intel GPU SYCL acceleration, download the whl from (**updated to 0.3.45**, includes the SYCL single-device sync fix — no manual patching needed):
    > ```
    > https://github.com/allanmeng/llama-cpp-python-sycl-windows
    > ```
@@ -47,6 +47,14 @@ pip install llama_cpp_python-0.3.41-<your-build>.whl
 ```
 
 > **Why uninstall first?** A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which can conflict with the new version's files. Uninstalling first ensures a clean state.
+
+### Upgrading to 0.3.45
+
+**0.3.45 is the recommended version** — its bundled llama.cpp already includes the SYCL single-device sync fix (ggml-org/llama.cpp PR #25741), which resolves the garbled-output issue on SYCL backends with Qwen3.5-class models. **No manual patching needed.** It also ships Windows DLL loading guard fixes and a modernized Embeddings API.
+
+> **Plugin compatibility**: this plugin auto-adapts across llama-cpp-python **0.3.39 ~ 0.3.45** (it detects at runtime whether `load_mode` is supported). Users on older whl do not need to upgrade the plugin.
+
+> **`use_mmap` / `use_mlock` / `use_direct_io` are deprecated** (0.3.45+ prints deprecation warnings; may be removed in future). The plugin now exposes a single `load_mode` dropdown instead. On older whl the plugin automatically translates back to the legacy parameters — behavior is identical.
 
 ## What's New (0.3.39+ Adaptation)
 
@@ -89,9 +97,12 @@ Configures advanced parameters for the model.
   - `main_gpu`: Main GPU ID (default: `0`).
   - `offload_kqv`: Offload K/Q/V to GPU (default: `Enabled`).
   - `numa`: NUMA support (default: `Disabled`).
-  - `use_mmap`: Memory mapping (default: `Enabled`).
-  - `use_mlock`: Memory locking (default: `Disabled`).
-  - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`).
+  - `load_mode`: Model loading mode (default: `mmap`; replaces deprecated `use_mmap`/`use_mlock`/`use_direct_io`).
+    - `mmap`: memory-map the model (equivalent to legacy `use_mmap=True`).
+    - `none`: no special loading mode.
+    - `mlock`: force model to stay in RAM (equivalent to legacy `use_mlock=True`).
+    - `mmap_mlock`: memory-map + lock in RAM.
+    - `direct_io`: direct I/O (Linux only).
   - `verbose`: Verbose logging (default: `Disabled`).
   - `ctx_checkpoints`: Context checkpoints (default: `0` to disable; `-1` for default; **required for hybrid models like Qwen3.5**).
   - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
