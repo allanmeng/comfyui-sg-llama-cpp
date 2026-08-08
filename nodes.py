@@ -185,30 +185,6 @@ for name, obj in inspect.getmembers(lcf):
         VISION_HANDLERS[vision_name] = obj
 
 
-# --- load_mode migration (llama-cpp-python >= 0.3.45) ---
-# use_mmap / use_mlock / use_direct_io are deprecated in favor of load_mode.
-# LLAMA_LOAD_MODE_NONE=0, MMAP=1, MLOCK=2, MMAP_MLOCK=3, DIRECT_IO=4
-LOAD_MODE_TO_INT = {
-    "none": 0,
-    "mmap": 1,
-    "mlock": 2,
-    "mmap_mlock": 3,
-    "direct_io": 4,
-}
-# Fallback mapping for older whl that lacks load_mode:
-LOAD_MODE_TO_LEGACY = {
-    "none":       {"use_mmap": False, "use_mlock": False, "use_direct_io": False},
-    "mmap":       {"use_mmap": True,  "use_mlock": False, "use_direct_io": False},
-    "mlock":      {"use_mmap": False, "use_mlock": True,  "use_direct_io": False},
-    "mmap_mlock": {"use_mmap": True,  "use_mlock": True,  "use_direct_io": False},
-    "direct_io":  {"use_mmap": False, "use_mlock": False, "use_direct_io": True},
-}
-
-# Cache whether the installed Llama() accepts load_mode (0.3.45+) or only legacy params
-_LLAMA_INIT_PARAMS = set(inspect.signature(Llama.__init__).parameters.keys())
-_HAS_LOAD_MODE = "load_mode" in _LLAMA_INIT_PARAMS
-
-
 class LlamaCPPModelLoader(io.ComfyNode):
     """Loads a GGUF model and optional mmproj for vision."""
     @classmethod
@@ -292,7 +268,9 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Int.Input("main_gpu", default=0, min=-1, max=100, tooltip="GPU ID for main device (-1 for default)", optional=True),
                 io.Boolean.Input("offload_kqv", default=True, tooltip="Enable offloading of K/Q/V tensors to GPU", optional=True),
                 io.Boolean.Input("numa", default=False, tooltip="Enable NUMA affinity", optional=True),
-                io.Combo.Input("load_mode", options=["mmap", "none", "mlock", "mmap_mlock", "direct_io"], default="mmap", tooltip="Model loading mode (replaces deprecated use_mmap/use_mlock/use_direct_io)", optional=True),
+                io.Boolean.Input("use_mmap", default=True, tooltip="Enable memory-mapped files", optional=True),
+                io.Boolean.Input("use_mlock", default=False, tooltip="Enable lock for memory-mapped files", optional=True),
+                io.Boolean.Input("use_direct_io", default=False, tooltip="Enable direct I/O for library (Linux only)", optional=True),
                 io.Boolean.Input("verbose", default=False, tooltip="Enable verbose logging", optional=True),
                 io.Int.Input("ctx_checkpoints", default=0, min=-1, max=1024, tooltip="Context checkpoints (-1 for default, 0 to disable; required for hybrid models like Qwen3.5)", optional=True),
                 io.Boolean.Input("vision_use_gpu", default=True, tooltip="Vision: Enable GPU for vision handler", optional=True),
@@ -408,17 +386,6 @@ class LlamaCPPEngine(io.ComfyNode):
                     if v == -1 and k != "n_gpu_layers":
                         continue
                     llama_kwargs[k] = v
-
-            # load_mode migration: pass load_mode if the installed whl supports it,
-            # otherwise translate back to the deprecated use_mmap/use_mlock/use_direct_io
-            if "load_mode" in llama_kwargs:
-                lm = llama_kwargs.pop("load_mode")
-                if _HAS_LOAD_MODE:
-                    llama_kwargs["load_mode"] = LOAD_MODE_TO_INT.get(lm, 1)
-                else:
-                    legacy = LOAD_MODE_TO_LEGACY.get(lm, {"use_mmap": True, "use_mlock": False, "use_direct_io": False})
-                    for legacy_k, legacy_v in legacy.items():
-                        llama_kwargs[legacy_k] = legacy_v
 
             # Handle vision models: pass mmproj_path to Llama() and let it
             # create the chat handler internally (required by llama-cpp-python >= 0.3.39)
