@@ -48,16 +48,22 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 
 > **为什么要先卸载？** 直接用 `--upgrade` 可能留下旧版 `lib/` 中的残留 DLL，与新版本文件冲突。先卸载能确保干净安装。
 
-## 更新内容（0.3.39+ 适配）
+## 更新内容（v1.7.0）
 
-本 Fork 适配了 **llama-cpp-python 0.3.39+**，该版本引入了重大 MTMD（Multi-Modal Token Decomposition）重写：
+本 Fork 适配了 **llama-cpp-python 0.3.39+**（MTMD 重写），并在此基础上提供额外修复与调优：
 
-- **`clip_model_path` 已废弃** → 改为 `mmproj_path` 直接传给 `Lama()`
+### v1.7.0（2026-08-22）
+- **`LlamaCPPOptions` 新增 `checkpoint_interval` / `checkpoint_on_device` 选项**（默认 `4096` / `禁用`），用于混合架构模型。经 2×2 基准测试（host/device × 8/16 checkpoints）验证：对加载、编码、token 吞吐均无影响——默认值对大多数用户即为最优。
+- **`LlamaCPPEngine` 新增 `think_display` 开关** —— `show`/`hide` 控制保留或剥离 `<think>…</think>` 推理块。可处理畸形标签（缺开标签、多个闭标签、悬空开标签）。
+- **think 剥离健壮性** —— 只保留最后一个 `</think>` 之后的内容（引擎可能输出缺开标签的 `</think>…推理…</think>答案` 形态）。
+- **`ctx_checkpoints` 默认值 `0` → `-1`** —— `0` 会触发 llama-cpp-python 0.3.48 的坏 fast-path 导致大图崩溃；`-1` 使用 llama_cpp 默认（16）并规避崩溃。
+- **大图 n_ctx 耗尽 → 反应式英文提示**（不强制覆盖）：若首 decode 报 "memory slot for batch"，引擎会提示你调高 `n_ctx`（大图 8192 已实测通过）。
+
+### 0.3.39+ 适配
+- **`clip_model_path` 已废弃** → 改为 `mmproj_path` 直接传给 `Llama()`
 - **移除手动创建 handler** → `Llama()` 现在通过 `chat_handler_kwargs` 内部自动创建视觉 handler
 - **`GenericMTMDChatHandler`** 替代模型特定 handler，成为主要视觉 handler
 - **参数过滤** 对 `GenericMTMDChatHandler` 与 `MTMDChatHandler` 取并集进行过滤
-- **新增 `ctx_checkpoints` 选项**（默认 `-1`；`0` 禁用，在 llama-cpp-python 0.3.48 下会导致大图崩溃 —— 混合架构模型如 Qwen3.5 Transformer+Mamba 必须设置）
-- **`LlamaCPPEngine` 新增 `think_display` 开关** —— `show`/`hide` 控制保留或剥离 `<think>…</think>` 推理块（可处理畸形标签）
 - **移除无效 UI 参数**：`vision_enable_thinking`、`vision_force_reasoning`、`vision_add_vision_id`（`GenericMTMDChatHandler` 不接受）
 - **`vision_image_min_tokens` 默认值** 从 `-1` 改为 `1024`（Qwen-VL 最低要求）
 

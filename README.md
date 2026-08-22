@@ -48,16 +48,22 @@ pip install llama_cpp_python-0.3.41-<your-build>.whl
 
 > **Why uninstall first?** A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which can conflict with the new version's files. Uninstalling first ensures a clean state.
 
-## What's New (0.3.39+ Adaptation)
+## What's New (v1.7.0)
 
-This fork adapts the plugin for **llama-cpp-python 0.3.39+**, which introduced a major MTMD (Multi-Modal Token Decomposition) rewrite:
+This fork adapts the plugin for **llama-cpp-python 0.3.39+** (MTMD rewrite) and ships additional fixes/tuning on top:
 
+### v1.7.0 (2026-08-22)
+- **`checkpoint_interval` / `checkpoint_on_device` options** on `LlamaCPPOptions` for hybrid models (defaults `4096` / `Disabled`). Verified via 2×2 benchmark (host/device × 8/16 checkpoints): no impact on load, encode or token throughput — defaults are optimal for most users.
+- **`think_display` toggle on `LlamaCPPEngine`** — `show`/`hide` to keep or strip the `<think>…</think>` reasoning block. Handles malformed tags (missing opening, multiple closing, dangling open).
+- **`think` stripping robustness** — keeps only text after the *last* `</think>` (engines may emit `</think>…reasoning…<//think>answer` with no opening tag).
+- **`ctx_checkpoints` default changed `0` → `-1`** — `0` triggers a buggy fast-path in llama-cpp-python 0.3.48 that crashes on large images; `-1` uses the llama_cpp default (16) and avoids the crash.
+- **Large-image `n_ctx` exhaustion → reactive English hint** (no forced override): if the first decode fails with "memory slot for batch", the engine tells you to raise `n_ctx` (8192 known-good for large images).
+
+### 0.3.39+ Adaptation
 - **`clip_model_path` deprecated** → replaced by `mmproj_path` passed directly to `Llama()`
 - **Manual handler creation removed** → `Llama()` now internally creates the vision handler via `chat_handler_kwargs`
 - **`GenericMTMDChatHandler`** replaces model-specific handlers as the primary vision handler
 - **Parameter filtering** inspects `GenericMTMDChatHandler` union `MTMDChatHandler` to filter valid kwargs
-- **`ctx_checkpoints` option** added (default `-1`; `0` disables and crashes on large images with llama-cpp-python 0.3.48 — required for hybrid models like Qwen3.5 Transformer+Mamba)
-- **`think_display` toggle on `LlamaCPPEngine`** — `show`/`hide` to keep or strip the `<think>…</think>` reasoning block (handles malformed tags)
 - **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id` (not accepted by `GenericMTMDChatHandler`)
 - **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
 
