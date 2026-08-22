@@ -274,6 +274,8 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Boolean.Input("use_direct_io", default=False, tooltip="Enable direct I/O for library (Linux only)", optional=True),
                 io.Boolean.Input("verbose", default=False, tooltip="Enable verbose logging", optional=True),
                 io.Int.Input("ctx_checkpoints", default=-1, min=-1, max=1024, tooltip="Context checkpoints (-1 = use llama-cpp-python default 16; 0 disables). In llama-cpp-python >= 0.3.48, 0 forces hybrid vision models down a 'Bypassing rollback' fast-path that fails at first decode on large images (e.g. 4000+ vision tokens). Keep -1 for vision.", optional=True),
+                io.Int.Input("checkpoint_interval", default=4096, min=1, max=262144, tooltip="Hybrid model checkpoint token interval (llama-cpp-python default 4096). How often context checkpoints are created for rollback on hybrid (Mamba) models.", optional=True),
+                io.Boolean.Input("checkpoint_on_device", default=False, tooltip="Store hybrid/recurrent checkpoint tensor payloads in device (GPU) buffers via LLAMA_STATE_SEQ_FLAGS_ON_DEVICE instead of host memory. Faster restores, but uses VRAM. Default False.", optional=True),
                 io.Boolean.Input("vision_use_gpu", default=True, tooltip="Vision: Enable GPU for vision handler", optional=True),
                 io.Int.Input("vision_image_min_tokens", default=1024, min=-1, max=16384, tooltip="Vision: Minimum image tokens (1024+ recommended for Qwen-VL, -1 for default)", optional=True),
                 io.Int.Input("vision_image_max_tokens", default=-1, min=-1, max=16384, tooltip="Vision: Maximum image tokens (-1 for default)", optional=True),

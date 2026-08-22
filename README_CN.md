@@ -95,6 +95,8 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `use_direct_io`：直接 I/O（仅 Linux，默认：`禁用`）。
   - `verbose`：详细日志（默认：`禁用`）。
   - `ctx_checkpoints`：上下文检查点（默认：`-1` 使用默认值；`0` 禁用 —— **llama-cpp-python 0.3.48 下不要用 `0`，会触发坏 fast-path 导致大图崩溃**；混合架构模型如 Qwen3.5 必须设置）。
+  - `checkpoint_interval`：混合架构 checkpoint 间隔（默认：`4096`）。
+  - `checkpoint_on_device`：将 checkpoint 载荷存入显存（默认：`禁用`；每个约 50 MiB，不影响吞吐 —— 实测默认值即为最优）。
   - `vision_use_gpu`：视觉 handler 启用 GPU（默认：`启用`）。
   - `vision_image_min_tokens`：最小图像 token 数（默认：`1024`，Qwen-VL 推荐；`-1` 使用默认值）。
   - `vision_image_max_tokens`：最大图像 token 数（默认：`-1` 使用默认值）。

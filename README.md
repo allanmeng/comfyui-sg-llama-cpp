@@ -95,6 +95,8 @@ Configures advanced parameters for the model.
   - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`).
   - `verbose`: Verbose logging (default: `Disabled`).
   - `ctx_checkpoints`: Context checkpoints (default: `-1` for default; `0` disables — **do not use `0` with llama-cpp-python 0.3.48, it triggers a buggy fast-path that crashes on large images**; required for hybrid models like Qwen3.5).
+  - `checkpoint_interval`: Hybrid checkpoint token interval (default: `4096`).
+  - `checkpoint_on_device`: Store hybrid checkpoint payloads in VRAM (default: `Disabled`; ~50 MiB per checkpoint, no throughput impact — benchmarks show defaults are optimal).
   - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
   - `vision_image_min_tokens`: Minimum image tokens (default: `1024`, recommended for Qwen-VL; `-1` for default).
   - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default).

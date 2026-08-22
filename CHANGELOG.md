@@ -2,7 +2,7 @@
 
 All notable changes to this fork are documented here.
 
-## [Unreleased] — 2026-08-22
+## [1.7.0] — 2026-08-22
 
 ### Fixed
 - **`think` content stripping (hide mode) for malformed tags.**
@@ -22,6 +22,12 @@ All notable changes to this fork are documented here.
   Moved from `LlamaCPPOptions` to the Engine node. Combo `show` / `hide`
   (default `show`). `hide` strips the `<think>…</think>` reasoning block so only the
   final answer is returned. Pure output post-processing — no model reload required.
+- **`checkpoint_interval` and `checkpoint_on_device` options on `LlamaCPPOptions`.**
+  Expose the hybrid checkpoint tuning knobs (defaults: 4096 / False, matching
+  llama-cpp-python). Verified via 2×2 benchmark (host/device × 8/16 checkpoints)
+  that these knobs do not affect load time, encode time or token throughput —
+  defaults are optimal for most users; advanced users may enable
+  `checkpoint_on_device` to move the 50 MiB checkpoint payload to VRAM.
 
 ### Changed
 - **Large-image `n_ctx` exhaustion is now a reactive hint, not a forced override.**
