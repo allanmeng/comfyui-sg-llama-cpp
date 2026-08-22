@@ -4,6 +4,7 @@ import inspect
 import torch
 import sys
 import json
+import re
 from llama_cpp import Llama, llama_backend_free
 from llama_cpp.llama_chat_format import LlamaChatCompletionHandlerRegistry
 try:
@@ -272,7 +273,7 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Boolean.Input("use_mlock", default=False, tooltip="Enable lock for memory-mapped files", optional=True),
                 io.Boolean.Input("use_direct_io", default=False, tooltip="Enable direct I/O for library (Linux only)", optional=True),
                 io.Boolean.Input("verbose", default=False, tooltip="Enable verbose logging", optional=True),
-                io.Int.Input("ctx_checkpoints", default=0, min=-1, max=1024, tooltip="Context checkpoints (-1 for default, 0 to disable; required for hybrid models like Qwen3.5)", optional=True),
+                io.Int.Input("ctx_checkpoints", default=-1, min=-1, max=1024, tooltip="Context checkpoints (-1 = use llama-cpp-python default 16; 0 disables). In llama-cpp-python >= 0.3.48, 0 forces hybrid vision models down a 'Bypassing rollback' fast-path that fails at first decode on large images (e.g. 4000+ vision tokens). Keep -1 for vision.", optional=True),
                 io.Boolean.Input("vision_use_gpu", default=True, tooltip="Vision: Enable GPU for vision handler", optional=True),
                 io.Int.Input("vision_image_min_tokens", default=1024, min=-1, max=16384, tooltip="Vision: Minimum image tokens (1024+ recommended for Qwen-VL, -1 for default)", optional=True),
                 io.Int.Input("vision_image_max_tokens", default=-1, min=-1, max=16384, tooltip="Vision: Maximum image tokens (-1 for default)", optional=True),
@@ -324,6 +325,7 @@ class LlamaCPPEngine(io.ComfyNode):
                 io.Float.Input("present_penalty", default=0.0, min=0.0, max=5.0, step=0.01, tooltip="Present penalty", optional=True),
                 io.Float.Input("frequency_penalty", default=0.0, min=0.0, max=5.0, step=0.01, tooltip="Frequency penalty", optional=True),
                 io.Int.Input("seed", default=1, min=-sys.maxsize, max=sys.maxsize, control_after_generate=True, tooltip="Random seed", optional=True),
+                io.Combo.Input("think_display", options=["show", "hide"], default="show", tooltip="Control <think>...</think> reasoning output. 'show' keeps it in the response; 'hide' strips it so only the final answer is returned.", optional=True),
             ],
             outputs=[
                 io.String.Output(display_name="RESPONSE")
@@ -331,7 +333,7 @@ class LlamaCPPEngine(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "close", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 512, temperature: float = 0.2, top_p: float = 0.95, top_k: int = 40, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = -1) -> io.NodeOutput:
+    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "close", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 512, temperature: float = 0.2, top_p: float = 0.95, top_k: int = 40, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = -1, think_display: str = "show") -> io.NodeOutput:
         global _global_llm
         try:
             # Validate inputs
@@ -465,12 +467,43 @@ class LlamaCPPEngine(io.ComfyNode):
 
             response_text = response["choices"][0]["message"]["content"]
 
+            # Strip the whole <think> reasoning block (tags + content) when hiding,
+            # keeping only the final answer. This is pure output post-processing:
+            # the model still reasons internally, but only the answer is returned.
+            # Models emit the block inconsistently — well-formed <think>..</think>,
+            # missing the opening tag, with multiple </think>, or a dangling open —
+            # so the robust rule is: the answer always follows the LAST </think>.
+            if str(think_display).lower() == "hide":
+                last_close = response_text.rfind("</think>")
+                if last_close != -1:
+                    response_text = response_text[last_close + len("</think>"):]
+                else:
+                    m = re.search(r"<think>", response_text)
+                    if m:
+                        response_text = response_text[:m.start()]
+                response_text = re.sub(r"<think>|<//think>", "", response_text).strip()
+
             # Post-generation memory cleanup
             _cleanup_global_llm(memory_cleanup)
 
         except Exception as e:
-            response_text = f"Error generating response: {str(e)}"
-            print(f"LlamaCPP Engine Error: {str(e)}")
+            _err = str(e)
+            # Reactive detection: the hybrid recurrent memory backend crashes
+            # cryptically when n_ctx has no headroom left for the first decode
+            # slot after a large image prefill ("failed to find a memory slot
+            # for batch of size 1"). Translate it into an actionable hint.
+            _hint = ""
+            if "memory slot for batch of size" in _err or "Failed completely even with batch size" in _err:
+                _nctx = options.get("n_ctx", 2048)
+                _hint = (
+                    "  Hint: the model ran out of KV/decoding slots on the first decode "
+                    "token — this usually means n_ctx (currently %d) is too small for the "
+                    "image you loaded. Increase n_ctx in the Options node (8192 is known-good "
+                    "for large images; use a higher value for even larger images) and retry."
+                    % _nctx
+                )
+            response_text = f"Error generating response: {_err}{_hint}"
+            print(f"LlamaCPP Engine Error: {_err}{_hint}")
 
         return io.NodeOutput(response_text)
 

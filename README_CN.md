@@ -56,7 +56,8 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 - **移除手动创建 handler** → `Llama()` 现在通过 `chat_handler_kwargs` 内部自动创建视觉 handler
 - **`GenericMTMDChatHandler`** 替代模型特定 handler，成为主要视觉 handler
 - **参数过滤** 对 `GenericMTMDChatHandler` 与 `MTMDChatHandler` 取并集进行过滤
-- **新增 `ctx_checkpoints` 选项**（默认 `0`，混合架构模型如 Qwen3.5 Transformer+Mamba 必须设置）
+- **新增 `ctx_checkpoints` 选项**（默认 `-1`；`0` 禁用，在 llama-cpp-python 0.3.48 下会导致大图崩溃 —— 混合架构模型如 Qwen3.5 Transformer+Mamba 必须设置）
+- **`LlamaCPPEngine` 新增 `think_display` 开关** —— `show`/`hide` 控制保留或剥离 `<think>…</think>` 推理块（可处理畸形标签）
 - **移除无效 UI 参数**：`vision_enable_thinking`、`vision_force_reasoning`、`vision_add_vision_id`（`GenericMTMDChatHandler` 不接受）
 - **`vision_image_min_tokens` 默认值** 从 `-1` 改为 `1024`（Qwen-VL 最低要求）
 
@@ -93,7 +94,7 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `use_mlock`：内存锁定（默认：`禁用`）。
   - `use_direct_io`：直接 I/O（仅 Linux，默认：`禁用`）。
   - `verbose`：详细日志（默认：`禁用`）。
-  - `ctx_checkpoints`：上下文检查点（默认：`0` 禁用；`-1` 使用默认值；**混合架构模型如 Qwen3.5 必须设置**）。
+  - `ctx_checkpoints`：上下文检查点（默认：`-1` 使用默认值；`0` 禁用 —— **llama-cpp-python 0.3.48 下不要用 `0`，会触发坏 fast-path 导致大图崩溃**；混合架构模型如 Qwen3.5 必须设置）。
   - `vision_use_gpu`：视觉 handler 启用 GPU（默认：`启用`）。
   - `vision_image_min_tokens`：最小图像 token 数（默认：`1024`，Qwen-VL 推荐；`-1` 使用默认值）。
   - `vision_image_max_tokens`：最大图像 token 数（默认：`-1` 使用默认值）。
@@ -124,6 +125,7 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `present_penalty`：Presence 惩罚（默认：`0.0`）。
   - `frequency_penalty`：Frequency 惩罚（默认：`0.0`）。
   - `seed`：随机种子（默认：`1`）。
+  - `think_display`：`show` 或 `hide`（默认 `show`）。选 `hide` 会剥离 `<think>…</think>` 推理块，只返回最终答案。可处理畸形标签（缺开标签、多个闭标签、悬空开标签）。
 
 **输出**
 - `RESPONSE`：生成的文本。

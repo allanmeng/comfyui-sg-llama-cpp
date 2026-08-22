@@ -56,7 +56,8 @@ This fork adapts the plugin for **llama-cpp-python 0.3.39+**, which introduced a
 - **Manual handler creation removed** → `Llama()` now internally creates the vision handler via `chat_handler_kwargs`
 - **`GenericMTMDChatHandler`** replaces model-specific handlers as the primary vision handler
 - **Parameter filtering** inspects `GenericMTMDChatHandler` union `MTMDChatHandler` to filter valid kwargs
-- **`ctx_checkpoints` option** added (default `0`, required for hybrid models like Qwen3.5 Transformer+Mamba)
+- **`ctx_checkpoints` option** added (default `-1`; `0` disables and crashes on large images with llama-cpp-python 0.3.48 — required for hybrid models like Qwen3.5 Transformer+Mamba)
+- **`think_display` toggle on `LlamaCPPEngine`** — `show`/`hide` to keep or strip the `<think>…</think>` reasoning block (handles malformed tags)
 - **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id` (not accepted by `GenericMTMDChatHandler`)
 - **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
 
@@ -93,7 +94,7 @@ Configures advanced parameters for the model.
   - `use_mlock`: Memory locking (default: `Disabled`).
   - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`).
   - `verbose`: Verbose logging (default: `Disabled`).
-  - `ctx_checkpoints`: Context checkpoints (default: `0` to disable; `-1` for default; **required for hybrid models like Qwen3.5**).
+  - `ctx_checkpoints`: Context checkpoints (default: `-1` for default; `0` disables — **do not use `0` with llama-cpp-python 0.3.48, it triggers a buggy fast-path that crashes on large images**; required for hybrid models like Qwen3.5).
   - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
   - `vision_image_min_tokens`: Minimum image tokens (default: `1024`, recommended for Qwen-VL; `-1` for default).
   - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default).
@@ -124,6 +125,9 @@ The main generation node.
   - `present_penalty`: Penalty for presence of tokens (default: `0.0`).
   - `frequency_penalty`: Penalty for frequency of tokens (default: `0.0`).
   - `seed`: Random seed (default: `1`).
+  - `think_display`: `show` or `hide` (default: `show`). `hide` strips the
+    `<think>…</think>` reasoning block so only the final answer is returned.
+    Handles malformed tags (missing opening, multiple closing, dangling open).
 
 **Outputs**
 - `RESPONSE`: The generated text.
