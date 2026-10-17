@@ -26,6 +26,18 @@ All notable changes to this fork are documented here.
 - **`load_mode` / `lazy_mode` / `flash_attn_type` on `LlamaCPPOptions`** (llama-cpp-python 0.4.x).
 - **`vision_flash_attn` on `LlamaCPPOptions`** (0.4.x, tri-state `auto`/`enabled`/`disabled`;
   `auto` keeps the handler default `None`).
+- **`type_k` / `type_v` KV cache quantization on `LlamaCPPOptions`** (0.4.x; maps to
+  llama.cpp `--cache-type-k` / `--cache-type-v`, i.e. a `ggml_type` value). Defaults
+  `auto` = the library default `f16`, so behaviour is unchanged unless opted in.
+  Quantizing shrinks the KV cache proportionally to bits per element, which matters most
+  at large `n_ctx`: for a Qwen3.5-4B at `n_ctx=8192` the f16 KV cache is ~256 MiB, so
+  `q8_0` saves ~114 MiB and `q4_0` ~181 MiB — 22–35% of a ~513 MiB compute buffer.
+  - **A quantized V cache requires Flash Attention.** `llama-context.cpp` refuses to
+    build the context (`"V cache quantization requires flash_attn"`) when
+    `flash_attn_type` is `disabled`; the plugin now rejects that combination up front
+    with an actionable message instead of an opaque context-creation failure.
+  - The type's block size must divide the head dimension (32 divides the 256 of
+    Qwen3.5); unsupported combinations are reported by llama.cpp itself.
 - **Parameter whitelist against the installed `Llama()` signature**, so a single code path
   serves both 0.3.x and 0.4.x: parameters unknown to the installed build are dropped
   instead of leaking into `**kwargs`. Detection is by signature, not by version string.

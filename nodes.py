@@ -45,11 +45,26 @@ _LOAD_MODE_VALUES = {
 _LAZY_MODE_VALUES = {"off": 0, "auto": 1, "on": 2}
 _FLASH_ATTN_VALUES = {"auto": -1, "disabled": 0, "enabled": 1}
 
+# KV cache element types -> ggml_type values (ggml/include/ggml.h). llama.cpp
+# defaults both K and V to GGML_TYPE_F16; quantizing them shrinks the KV cache
+# proportionally to the bits per element.
+_KV_TYPE_VALUES = {
+    "f32": 0, "f16": 1, "q4_0": 2, "q4_1": 3, "q5_0": 6, "q5_1": 7,
+    "q8_0": 8, "iq4_nl": 20, "bf16": 30,
+}
+# The subset that ggml_is_quantized() reports as quantized. A quantized V cache
+# requires flash attention (see the validation in LlamaCPPEngine.execute).
+_KV_QUANTIZED_VALUES = frozenset(
+    _KV_TYPE_VALUES[k] for k in ("q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl")
+)
+
 # Options keys whose Combo string value must be converted to an int enum value.
 _ENUM_OPTIONS = {
     "load_mode": _LOAD_MODE_VALUES,
     "lazy_mode": _LAZY_MODE_VALUES,
     "flash_attn_type": _FLASH_ATTN_VALUES,
+    "type_k": _KV_TYPE_VALUES,
+    "type_v": _KV_TYPE_VALUES,
 }
 
 # Config file path
@@ -314,6 +329,8 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Combo.Input("lazy_mode", options=["auto", "off", "on"], default="auto", tooltip="[0.4.x] Lazy tensor loading (requires mmap). 'auto' = lazy only for tensors larger than 4 GiB. No effect on 0.3.x.", optional=True),
                 io.Combo.Input("flash_attn_type", options=["auto", "disabled", "enabled"], default="auto", tooltip="[0.4.x] Flash Attention for the main model. 'auto' lets llama.cpp decide. No effect on 0.3.x.", optional=True),
                 io.Combo.Input("vision_flash_attn", options=["auto", "enabled", "disabled"], default="auto", tooltip="[0.4.x] Flash Attention inside the vision encoder. 'auto' leaves the handler default (None). Can speed up clip_encode, which dominates large-image latency. No effect on 0.3.x.", optional=True),
+                io.Combo.Input("type_k", options=["auto", "f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "bf16"], default="auto", tooltip="[0.4.x] KV cache data type for K (llama.cpp --cache-type-k). 'auto' keeps f16. At n_ctx=8192 the KV cache is a large slice of VRAM, so q8_0 roughly halves it and q4_0 cuts it to ~a quarter. The type's block size must divide the head dimension (32 divides 256 on Qwen3.5). No effect on 0.3.x.", optional=True),
+                io.Combo.Input("type_v", options=["auto", "f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "bf16"], default="auto", tooltip="[0.4.x] KV cache data type for V (llama.cpp --cache-type-v). 'auto' keeps f16. IMPORTANT: a quantized V cache requires Flash Attention — llama.cpp refuses to build the context when flash_attn_type='disabled', so this plugin rejects that combination up front. No effect on 0.3.x.", optional=True),
             ],
             outputs=[
                 io.Custom("LLAMA_OPTIONS").Output(display_name="OPTIONS")
@@ -511,6 +528,26 @@ class LlamaCPPEngine(io.ComfyNode):
                 # Let Llama() auto-detect chat_format for vision models
                 llama_kwargs.pop("chat_format", None)
 
+            # KV cache quantization and Flash Attention are coupled in llama.cpp:
+            # llama-context.cpp rejects a quantized V cache while flash attention
+            # is disabled ("V cache quantization requires flash_attn") and returns
+            # a null context. Validate up front so the user gets an actionable
+            # message instead of an opaque context-creation failure.
+            _v_type = llama_kwargs.get("type_v")
+            if (
+                _v_type in _KV_QUANTIZED_VALUES
+                and llama_kwargs.get("flash_attn_type") == _FLASH_ATTN_VALUES["disabled"]
+            ):
+                _v_label = next(
+                    (k for k, v in _KV_TYPE_VALUES.items() if v == _v_type), str(_v_type)
+                )
+                raise ValueError(
+                    f"type_v='{_v_label}' (quantized KV cache) requires Flash Attention, "
+                    f"but flash_attn_type is 'disabled'. Set flash_attn_type to 'auto' or "
+                    f"'enabled' on the Llama CPP Options node, or set type_v back to "
+                    f"'auto' (f16) and retry."
+                )
+
             # Echo the resolved 0.4.x tuning parameters when verbose is on, so it
             # is possible to confirm from the console that a Combo actually made
             # it through the enum mapping (and was not dropped as an unknown or
@@ -518,7 +555,7 @@ class LlamaCPPEngine(io.ComfyNode):
             if options.get("verbose"):
                 _tuning = {
                     _k: llama_kwargs.get(_k)
-                    for _k in ("load_mode", "lazy_mode", "flash_attn_type")
+                    for _k in ("load_mode", "lazy_mode", "flash_attn_type", "type_k", "type_v")
                 }
                 _tuning["vision_chat_handler_kwargs"] = llama_kwargs.get(
                     "chat_handler_kwargs", {}
