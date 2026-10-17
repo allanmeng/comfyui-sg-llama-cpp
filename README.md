@@ -48,11 +48,19 @@ pip install llama_cpp_python-0.3.41-<your-build>.whl
 
 > **Why uninstall first?** A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which can conflict with the new version's files. Uninstalling first ensures a clean state.
 
-## What's New (v1.7.0)
+## What's New (v2.3.0)
 
 This fork adapts the plugin for **llama-cpp-python 0.3.39+** (MTMD rewrite) and ships additional fixes/tuning on top:
 
-### v1.7.0 (2026-08-22)
+### v2.3.0 (2026-10-17)
+- **`use_mmap` / `use_mlock` / `use_direct_io` were dead switches on 0.4.x** — they now show as `[DEPRECATED in 0.4.x]`, still work on 0.3.x, and are skipped when the build supports `load_mode`.
+- **New 0.4.x knobs exposed**: `load_mode`, `lazy_mode`, `flash_attn_type`, `vision_flash_attn` (all default `auto`).
+- **Parameter whitelist against the installed `Llama()` signature** — one code path for 0.3.x and 0.4.x, unknown params are dropped instead of leaking into `**kwargs`.
+- **Vision token bounds no longer abort the run** — an inconsistent `vision_image_max_tokens` is dropped with a warning instead of raising.
+- **New Options inputs are appended, never inserted mid-list** — ComfyUI stores widget values positionally, so mid-list insertions corrupted existing workflows.
+- Benchmarked on B580/0.4.3: the four new knobs gave **no measurable speed-up** (`clip_encode` spread ≤1.4%); defaults stay `auto`.
+
+### v2.2.0 (2026-08-22)
 - **`checkpoint_interval` / `checkpoint_on_device` options** on `LlamaCPPOptions` for hybrid models (defaults `4096` / `Disabled`). Verified via 2×2 benchmark (host/device × 8/16 checkpoints): no impact on load, encode or token throughput — defaults are optimal for most users.
 - **`think_display` toggle on `LlamaCPPEngine`** — `show`/`hide` to keep or strip the `<think>…</think>` reasoning block. Handles malformed tags (missing opening, multiple closing, dangling open).
 - **`think` stripping robustness** — keeps only text after the *last* `</think>` (engines may emit `</think>…reasoning…<//think>answer` with no opening tag).
@@ -96,16 +104,24 @@ Configures advanced parameters for the model.
   - `main_gpu`: Main GPU ID (default: `0`).
   - `offload_kqv`: Offload K/Q/V to GPU (default: `Enabled`).
   - `numa`: NUMA support (default: `Disabled`).
-  - `use_mmap`: Memory mapping (default: `Enabled`).
-  - `use_mlock`: Memory locking (default: `Disabled`).
-  - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`).
-  - `verbose`: Verbose logging (default: `Disabled`).
+  - `use_mmap`: Memory mapping (default: `Enabled`). **DEPRECATED in llama-cpp-python 0.4.x** — ignored there, use `load_mode`; still honored by 0.3.x.
+  - `use_mlock`: Memory locking (default: `Disabled`). **DEPRECATED in 0.4.x** — use `load_mode=mlock`.
+  - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`). **DEPRECATED in 0.4.x** — use `load_mode=direct_io`.
+  - `verbose`: Verbose logging (default: `Disabled`). When enabled, the resolved 0.4.x tuning parameters are echoed to the console.
   - `ctx_checkpoints`: Context checkpoints (default: `-1` for default; `0` disables — **do not use `0` with llama-cpp-python 0.3.48, it triggers a buggy fast-path that crashes on large images**; required for hybrid models like Qwen3.5).
   - `checkpoint_interval`: Hybrid checkpoint token interval (default: `4096`).
   - `checkpoint_on_device`: Store hybrid checkpoint payloads in VRAM (default: `Disabled`; ~50 MiB per checkpoint, no throughput impact — benchmarks show defaults are optimal).
   - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
   - `vision_image_min_tokens`: Minimum image tokens (default: `1024`, recommended for Qwen-VL; `-1` for default).
-  - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default).
+  - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default). Must be `-1` or `>= vision_image_min_tokens`.
+  - `load_mode` (**0.4.x**): Model load strategy — `auto` / `none` / `mmap` / `mlock` / `mmap_mlock` / `direct_io` (default: `auto`).
+  - `lazy_mode` (**0.4.x**): Lazy tensor loading, requires mmap — `auto` / `off` / `on` (default: `auto`).
+  - `flash_attn_type` (**0.4.x**): Flash Attention for the main model — `auto` / `disabled` / `enabled` (default: `auto`).
+  - `vision_flash_attn` (**0.4.x**): Flash Attention inside the vision encoder — `auto` / `enabled` / `disabled` (default: `auto` = handler default).
+
+> The four `0.4.x` knobs are appended at the end of the input list on purpose: ComfyUI
+> maps saved workflow widget values by position. On a 0.3.x build they are ignored
+> automatically (detected from the installed `Llama()` signature).
 
 **Outputs**
 - `OPTIONS`: A configuration dictionary.

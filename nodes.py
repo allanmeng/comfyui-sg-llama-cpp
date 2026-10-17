@@ -26,6 +26,32 @@ from comfy_api.latest import io
 from typing import Dict, Any, List
 from .utils import image_to_data_uri
 
+# --- llama-cpp-python 0.4.x capability detection & enum mappings -------------
+# 0.4.x replaced the legacy `use_mmap` / `use_mlock` / `use_direct_io` booleans
+# with `load_mode` + `lazy_mode`. On 0.4.x those old booleans are silently
+# ignored (llama.py only prints a deprecation notice when verbose), so the
+# Options toggles would otherwise be dead switches. Feature-detect on the actual
+# Llama() signature instead of sniffing the version string, so 0.3.x installs
+# keep their previous behaviour untouched.
+_LLAMA_INIT_PARAMS = set(inspect.signature(Llama.__init__).parameters.keys())
+_SUPPORTS_LOAD_MODE = "load_mode" in _LLAMA_INIT_PARAMS
+_LEGACY_LOAD_KEYS = frozenset({"use_mmap", "use_mlock", "use_direct_io"})
+
+# Combo label -> llama.cpp enum value. These mirror llama_cpp.llama_cpp's
+# llama_load_mode / llama_lazy_mode / llama_flash_attn_type public enums.
+_LOAD_MODE_VALUES = {
+    "auto": -1, "none": 0, "mmap": 1, "mlock": 2, "mmap_mlock": 3, "direct_io": 4,
+}
+_LAZY_MODE_VALUES = {"off": 0, "auto": 1, "on": 2}
+_FLASH_ATTN_VALUES = {"auto": -1, "disabled": 0, "enabled": 1}
+
+# Options keys whose Combo string value must be converted to an int enum value.
+_ENUM_OPTIONS = {
+    "load_mode": _LOAD_MODE_VALUES,
+    "lazy_mode": _LAZY_MODE_VALUES,
+    "flash_attn_type": _FLASH_ATTN_VALUES,
+}
+
 # Config file path
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 
@@ -269,9 +295,9 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Int.Input("main_gpu", default=0, min=-1, max=100, tooltip="GPU ID for main device (-1 for default)", optional=True),
                 io.Boolean.Input("offload_kqv", default=True, tooltip="Enable offloading of K/Q/V tensors to GPU", optional=True),
                 io.Boolean.Input("numa", default=False, tooltip="Enable NUMA affinity", optional=True),
-                io.Boolean.Input("use_mmap", default=True, tooltip="Enable memory-mapped files", optional=True),
-                io.Boolean.Input("use_mlock", default=False, tooltip="Enable lock for memory-mapped files", optional=True),
-                io.Boolean.Input("use_direct_io", default=False, tooltip="Enable direct I/O for library (Linux only)", optional=True),
+                io.Boolean.Input("use_mmap", default=True, tooltip="[DEPRECATED in 0.4.x] Ignored by llama-cpp-python 0.4.x — use load_mode instead. Still honored by 0.3.x.", optional=True),
+                io.Boolean.Input("use_mlock", default=False, tooltip="[DEPRECATED in 0.4.x] Ignored by llama-cpp-python 0.4.x — use load_mode='mlock' instead. Still honored by 0.3.x.", optional=True),
+                io.Boolean.Input("use_direct_io", default=False, tooltip="[DEPRECATED in 0.4.x] Ignored by llama-cpp-python 0.4.x — use load_mode='direct_io' instead. Still honored by 0.3.x.", optional=True),
                 io.Boolean.Input("verbose", default=False, tooltip="Enable verbose logging", optional=True),
                 io.Int.Input("ctx_checkpoints", default=-1, min=-1, max=1024, tooltip="Context checkpoints (-1 = use llama-cpp-python default 16; 0 disables). In llama-cpp-python >= 0.3.48, 0 forces hybrid vision models down a 'Bypassing rollback' fast-path that fails at first decode on large images (e.g. 4000+ vision tokens). Keep -1 for vision.", optional=True),
                 io.Int.Input("checkpoint_interval", default=4096, min=1, max=262144, tooltip="Hybrid model checkpoint token interval (llama-cpp-python default 4096). How often context checkpoints are created for rollback on hybrid (Mamba) models.", optional=True),
@@ -279,6 +305,15 @@ class LlamaCPPOptions(io.ComfyNode):
                 io.Boolean.Input("vision_use_gpu", default=True, tooltip="Vision: Enable GPU for vision handler", optional=True),
                 io.Int.Input("vision_image_min_tokens", default=1024, min=-1, max=16384, tooltip="Vision: Minimum image tokens (1024+ recommended for Qwen-VL, -1 for default)", optional=True),
                 io.Int.Input("vision_image_max_tokens", default=-1, min=-1, max=16384, tooltip="Vision: Maximum image tokens (-1 for default)", optional=True),
+                # --- llama-cpp-python 0.4.x tuning knobs ------------------------
+                # Deliberately appended at the END of the input list. ComfyUI maps
+                # saved workflow widget values POSITIONALLY, so inserting a new
+                # input in the middle shifts the stored value of every widget
+                # after it (that is how load_mode ended up showing a boolean).
+                io.Combo.Input("load_mode", options=["auto", "none", "mmap", "mlock", "mmap_mlock", "direct_io"], default="auto", tooltip="[0.4.x] How model weights are loaded. 'auto' lets llama.cpp detect. 'mmap' memory-maps the file, 'mlock' pins it in RAM. No effect on 0.3.x (use the legacy toggles above).", optional=True),
+                io.Combo.Input("lazy_mode", options=["auto", "off", "on"], default="auto", tooltip="[0.4.x] Lazy tensor loading (requires mmap). 'auto' = lazy only for tensors larger than 4 GiB. No effect on 0.3.x.", optional=True),
+                io.Combo.Input("flash_attn_type", options=["auto", "disabled", "enabled"], default="auto", tooltip="[0.4.x] Flash Attention for the main model. 'auto' lets llama.cpp decide. No effect on 0.3.x.", optional=True),
+                io.Combo.Input("vision_flash_attn", options=["auto", "enabled", "disabled"], default="auto", tooltip="[0.4.x] Flash Attention inside the vision encoder. 'auto' leaves the handler default (None). Can speed up clip_encode, which dominates large-image latency. No effect on 0.3.x.", optional=True),
             ],
             outputs=[
                 io.Custom("LLAMA_OPTIONS").Output(display_name="OPTIONS")
@@ -383,13 +418,33 @@ class LlamaCPPEngine(io.ComfyNode):
                 "chat_format": chat_format,
             }
 
-            # Add options
+            # Add options. Filter against the installed Llama() signature so one
+            # code path serves both 0.3.x and 0.4.x — params introduced in 0.4.x
+            # are dropped instead of leaking into **kwargs on an older build.
             for k, v in options.items():
-                if not k.startswith("vision_"):
-                    # Whitelist for -1 values: only n_gpu_layers is allowed to pass -1
-                    if v == -1 and k != "n_gpu_layers":
+                if k.startswith("vision_"):
+                    continue
+                # Whitelist for -1 values: only n_gpu_layers is allowed to pass -1
+                if v == -1 and k != "n_gpu_layers":
+                    continue
+                if k not in _LLAMA_INIT_PARAMS:
+                    continue
+                # 0.4.x: legacy load booleans are no-ops superseded by load_mode
+                if k in _LEGACY_LOAD_KEYS and _SUPPORTS_LOAD_MODE:
+                    continue
+                # Combo label ("auto"/"mmap"/...) -> llama.cpp enum int.
+                # Anything unrecognised (e.g. a stale workflow that stored another
+                # widget's value in this slot) falls back to the library default
+                # instead of forwarding garbage like load_mode=False to llama.cpp.
+                if k in _ENUM_OPTIONS:
+                    _label = str(v).strip().lower()
+                    if _label == "auto":
                         continue
-                    llama_kwargs[k] = v
+                    _mapped = _ENUM_OPTIONS[k].get(_label)
+                    if _mapped is None:
+                        continue
+                    v = _mapped
+                llama_kwargs[k] = v
 
             # Handle vision models: pass mmproj_path to Llama() and let it
             # create the chat handler internally (required by llama-cpp-python >= 0.3.39)
@@ -409,11 +464,45 @@ class LlamaCPPEngine(io.ComfyNode):
                 for k, v in options.items():
                     if k.startswith("vision_"):
                         param_name = k.replace("vision_", "")
-                        if param_name in accepted_params:
-                            # Skip -1 values (use handler defaults)
-                            if v == -1:
-                                continue
-                            chat_handler_kwargs[param_name] = v
+                        if param_name not in accepted_params:
+                            continue
+                        # vision_flash_attn is a tri-state Combo while the handler
+                        # expects Optional[bool]. Only explicit on/off values are
+                        # forwarded; "auto" or anything unrecognised keeps the
+                        # handler default (None) so a stale workflow cannot
+                        # silently disable Flash Attention.
+                        if param_name == "flash_attn":
+                            _fa = str(v).strip().lower()
+                            if _fa in ("true", "1", "on", "enabled"):
+                                chat_handler_kwargs[param_name] = True
+                            elif _fa in ("false", "0", "off", "disabled"):
+                                chat_handler_kwargs[param_name] = False
+                            continue
+                        # Skip -1 values (use handler defaults)
+                        if v == -1:
+                            continue
+                        chat_handler_kwargs[param_name] = v
+
+                # Guard the vision token bounds. GenericMTMDChatHandler raises
+                # "image_max_tokens cannot be less than image_min_tokens" whenever
+                # 0 < image_max_tokens < image_min_tokens, which is easy to hit
+                # when a stale workflow carries an unrelated number in the
+                # max_tokens widget. Drop the offending bound (falling back to the
+                # handler default) instead of failing the whole generation.
+                _vmin = chat_handler_kwargs.get("image_min_tokens")
+                _vmax = chat_handler_kwargs.get("image_max_tokens")
+                if (
+                    isinstance(_vmax, int) and _vmax > 0
+                    and isinstance(_vmin, int) and _vmax < _vmin
+                ):
+                    print(
+                        f"[llama_cpp vision] WARNING: vision_image_max_tokens ({_vmax}) "
+                        f"is less than vision_image_min_tokens ({_vmin}); ignoring the "
+                        f"max bound. Set vision_image_max_tokens to -1 (default) or "
+                        f">= {_vmin} to silence this.",
+                        file=sys.stderr,
+                    )
+                    chat_handler_kwargs.pop("image_max_tokens", None)
 
                 llama_kwargs["chat_handler_kwargs"] = chat_handler_kwargs
                 # Mirror Options' verbose setting into the vision chat handler
@@ -421,6 +510,20 @@ class LlamaCPPEngine(io.ComfyNode):
                     chat_handler_kwargs.setdefault("verbose", options["verbose"])
                 # Let Llama() auto-detect chat_format for vision models
                 llama_kwargs.pop("chat_format", None)
+
+            # Echo the resolved 0.4.x tuning parameters when verbose is on, so it
+            # is possible to confirm from the console that a Combo actually made
+            # it through the enum mapping (and was not dropped as an unknown or
+            # stale value).
+            if options.get("verbose"):
+                _tuning = {
+                    _k: llama_kwargs.get(_k)
+                    for _k in ("load_mode", "lazy_mode", "flash_attn_type")
+                }
+                _tuning["vision_chat_handler_kwargs"] = llama_kwargs.get(
+                    "chat_handler_kwargs", {}
+                )
+                print(f"[llama_cpp] resolved tuning params: {_tuning}")
 
             # Pre-generation LLM management
             if memory_cleanup == "persistent":

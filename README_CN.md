@@ -48,11 +48,19 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 
 > **为什么要先卸载？** 直接用 `--upgrade` 可能留下旧版 `lib/` 中的残留 DLL，与新版本文件冲突。先卸载能确保干净安装。
 
-## 更新内容（v1.7.0）
+## 更新内容（v2.3.0）
 
 本 Fork 适配了 **llama-cpp-python 0.3.39+**（MTMD 重写），并在此基础上提供额外修复与调优：
 
-### v1.7.0（2026-08-22）
+### v2.3.0（2026-10-17）
+- **`use_mmap` / `use_mlock` / `use_direct_io` 在 0.4.x 下是死开关** —— 现标注 `[0.4.x 已废弃]`，0.3.x 仍生效，0.4.x 下自动跳过。
+- **暴露 0.4.x 真开关**：`load_mode`、`lazy_mode`、`flash_attn_type`、`vision_flash_attn`（默认全为 `auto`）。
+- **按实际 `Llama()` 签名做参数白名单** —— 0.3.x 与 0.4.x 共用一套代码，不支持的参数直接丢弃而不再漏进 `**kwargs`。
+- **视觉 token 边界不再中断整次运行** —— `vision_image_max_tokens` 取值不合法时丢弃该上界并打警告，不再抛错。
+- **新增 Options 输入一律追加到列表末尾** —— ComfyUI 按位置保存 widget 值，插在中间会破坏已有工作流。
+- B580/0.4.3 实测：4 个新参数**无任何可测提速**（`clip_encode` 散布 ≤1.4%），默认保持 `auto`。
+
+### v2.2.0（2026-08-22）
 - **`LlamaCPPOptions` 新增 `checkpoint_interval` / `checkpoint_on_device` 选项**（默认 `4096` / `禁用`），用于混合架构模型。经 2×2 基准测试（host/device × 8/16 checkpoints）验证：对加载、编码、token 吞吐均无影响——默认值对大多数用户即为最优。
 - **`LlamaCPPEngine` 新增 `think_display` 开关** —— `show`/`hide` 控制保留或剥离 `<think>…</think>` 推理块。可处理畸形标签（缺开标签、多个闭标签、悬空开标签）。
 - **think 剥离健壮性** —— 只保留最后一个 `</think>` 之后的内容（引擎可能输出缺开标签的 `</think>…推理…</think>答案` 形态）。
@@ -96,16 +104,23 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `main_gpu`：主 GPU ID（默认：`0`）。
   - `offload_kqv`：将 K/Q/V 卸载到 GPU（默认：`启用`）。
   - `numa`：NUMA 支持（默认：`禁用`）。
-  - `use_mmap`：内存映射（默认：`启用`）。
-  - `use_mlock`：内存锁定（默认：`禁用`）。
-  - `use_direct_io`：直接 I/O（仅 Linux，默认：`禁用`）。
-  - `verbose`：详细日志（默认：`禁用`）。
+  - `use_mmap`：内存映射（默认：`启用`）。**llama-cpp-python 0.4.x 已废弃**——0.4.x 下被忽略，请改用 `load_mode`；0.3.x 仍生效。
+  - `use_mlock`：内存锁定（默认：`禁用`）。**0.4.x 已废弃**——改用 `load_mode=mlock`。
+  - `use_direct_io`：直接 I/O（仅 Linux，默认：`禁用`）。**0.4.x 已废弃**——改用 `load_mode=direct_io`。
+  - `verbose`：详细日志（默认：`禁用`）。开启后会在控制台打印最终解析出的 0.4.x 调优参数。
   - `ctx_checkpoints`：上下文检查点（默认：`-1` 使用默认值；`0` 禁用 —— **llama-cpp-python 0.3.48 下不要用 `0`，会触发坏 fast-path 导致大图崩溃**；混合架构模型如 Qwen3.5 必须设置）。
   - `checkpoint_interval`：混合架构 checkpoint 间隔（默认：`4096`）。
   - `checkpoint_on_device`：将 checkpoint 载荷存入显存（默认：`禁用`；每个约 50 MiB，不影响吞吐 —— 实测默认值即为最优）。
   - `vision_use_gpu`：视觉 handler 启用 GPU（默认：`启用`）。
   - `vision_image_min_tokens`：最小图像 token 数（默认：`1024`，Qwen-VL 推荐；`-1` 使用默认值）。
-  - `vision_image_max_tokens`：最大图像 token 数（默认：`-1` 使用默认值）。
+  - `vision_image_max_tokens`：最大图像 token 数（默认：`-1` 使用默认值）。必须是 `-1` 或 `>= vision_image_min_tokens`。
+  - `load_mode`（**0.4.x**）：模型加载方式 —— `auto` / `none` / `mmap` / `mlock` / `mmap_mlock` / `direct_io`（默认：`auto`）。
+  - `lazy_mode`（**0.4.x**）：懒加载张量，需配合 mmap —— `auto` / `off` / `on`（默认：`auto`）。
+  - `flash_attn_type`（**0.4.x**）：主模型 Flash Attention —— `auto` / `disabled` / `enabled`（默认：`auto`）。
+  - `vision_flash_attn`（**0.4.x**）：视觉编码器 Flash Attention —— `auto` / `enabled` / `disabled`（默认：`auto` 表示沿用 handler 默认）。
+
+> 这 4 个 0.4.x 参数刻意**追加在输入列表末尾**：ComfyUI 按位置保存工作流 widget 值。
+> 在 0.3.x 上会被自动忽略（按实际 `Llama()` 签名探测，不嗅版本号）。
 
 **输出**
 - `OPTIONS`：配置字典。

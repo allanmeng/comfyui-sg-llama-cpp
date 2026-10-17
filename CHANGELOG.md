@@ -2,7 +2,48 @@
 
 All notable changes to this fork are documented here.
 
-## [1.7.0] — 2026-08-22
+## [2.3.0] — 2026-10-17
+
+### Fixed
+- **`use_mmap` / `use_mlock` / `use_direct_io` were dead switches on llama-cpp-python 0.4.x.**
+  0.4.x removed them from the load path (they only trigger a deprecation notice when
+  `verbose`) and replaced them with `load_mode` / `lazy_mode`. The three Options toggles
+  were silently ignored, so users had no working control over how weights were loaded.
+  They are now marked `[DEPRECATED in 0.4.x]`, still honored on 0.3.x, and skipped
+  entirely when the installed build supports `load_mode`.
+- **Vision token bounds no longer abort the whole run.**
+  `GenericMTMDChatHandler` raises `image_max_tokens cannot be less than image_min_tokens`
+  when `0 < image_max_tokens < image_min_tokens` — easy to hit when a stale workflow
+  carries an unrelated number in that widget. The plugin now drops the offending bound
+  (falling back to the handler default) and prints a warning instead of failing.
+- **New Options inputs are appended, never inserted mid-list.**
+  ComfyUI stores workflow widget values *positionally*, so inserting a new input in the
+  middle shifted the stored value of every widget after it (a Combo could render as a
+  boolean, an Int could inherit a neighbour's number). All new inputs are appended at
+  the end of the list to keep existing workflows intact.
+
+### Added
+- **`load_mode` / `lazy_mode` / `flash_attn_type` on `LlamaCPPOptions`** (llama-cpp-python 0.4.x).
+- **`vision_flash_attn` on `LlamaCPPOptions`** (0.4.x, tri-state `auto`/`enabled`/`disabled`;
+  `auto` keeps the handler default `None`).
+- **Parameter whitelist against the installed `Llama()` signature**, so a single code path
+  serves both 0.3.x and 0.4.x: parameters unknown to the installed build are dropped
+  instead of leaking into `**kwargs`. Detection is by signature, not by version string.
+- **`verbose=true` now echoes the resolved tuning parameters**, so it is possible to
+  confirm from the console that a Combo actually reached `Llama()`, e.g.
+  `[llama_cpp] resolved tuning params: {'load_mode': 0, 'lazy_mode': None, ...}`.
+
+### Notes
+- Benchmarked on Intel Arc B580 (SYCL, llama-cpp-python 0.4.3, Qwen3.5-4B, 1792×2304 /
+  4032 vision tokens): none of the four new knobs changed `clip_encode`, prefill speed or
+  token throughput beyond run-to-run noise (`clip_encode` spread ≤1.4%, ~11.0 s in all
+  configurations). `vision_flash_attn=enabled` was not faster than `disabled`.
+  Defaults therefore stay `auto` — these are exposed for tuning and future hardware, not
+  as a speed-up.
+
+## [2.2.0] — 2026-08-22
+> Renumbered from an incorrect `1.7.0` label: the latest release tag was `v2.1.0`,
+> so this release continues the 2.x line.
 
 ### Fixed
 - **`think` content stripping (hide mode) for malformed tags.**
