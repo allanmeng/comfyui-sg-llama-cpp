@@ -96,7 +96,7 @@ Configures advanced parameters for the model.
 **Inputs**
 - **Optional**:
   - `n_gpu_layers`: Number of layers to offload to GPU (default: `-1` for all).
-  - `n_ctx`: Context window size (default: `2048`).
+  - `n_ctx`: Context window size (default: `8192`; a large-image prefill needs 4000+ tokens of headroom).
   - `n_threads`: CPU threads to use (default: `-1` for auto).
   - `n_threads_batch`: Threads for batch processing (default: `-1` for auto).
   - `n_batch`: Batch size (default: `2048`).
@@ -137,19 +137,19 @@ The main generation node.
   - `images`: Input image(s) for vision models (supports batches).
   - `options`: Options from `LlamaCPPOptions`.
   - `system_prompt`: System instruction (default: empty).
-  - `memory_cleanup`: Strategy to clean memory after generation (default: `close`).
+  - `memory_cleanup`: Strategy to clean memory after generation (default: `full_cleanup`).
   - `response_format`: `text` or `json_object` (default: `text`).
   - `json_schema`: JSON Schema to enforce (available only when `json_object` is selected).
-  - `max_tokens`: Max new tokens (default: `512`).
-  - `temperature`: Randomness (default: `0.2`).
-  - `top_p`: Nucleus sampling (default: `0.95`).
-  - `top_k`: Top-k sampling (default: `40`).
+  - `max_tokens`: Max new tokens (default: `2048`).
+  - `temperature`: Randomness (default: `0.1`).
+  - `top_p`: Nucleus sampling (default: `0.9`).
+  - `top_k`: Top-k sampling (default: `20`).
   - `min_p`: Min-p sampling (default: `0.05`).
   - `repeat_penalty`: Penalty for repetition (default: `1.1`).
   - `present_penalty`: Penalty for presence of tokens (default: `0.0`).
   - `frequency_penalty`: Penalty for frequency of tokens (default: `0.0`).
   - `seed`: Random seed (default: `1`).
-  - `think_display`: `show` or `hide` (default: `show`). `hide` strips the
+  - `think_display`: `show` or `hide` (default: `hide`). `hide` strips the
     `<think>…</think>` reasoning block so only the final answer is returned.
     Handles malformed tags (missing opening, multiple closing, dangling open).
 

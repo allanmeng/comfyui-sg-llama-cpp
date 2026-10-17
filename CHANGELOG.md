@@ -33,6 +33,30 @@ All notable changes to this fork are documented here.
   confirm from the console that a Combo actually reached `Llama()`, e.g.
   `[llama_cpp] resolved tuning params: {'load_mode': 0, 'lazy_mode': None, ...}`.
 
+### Changed — tuned defaults
+Defaults retuned for vision/description workflows (a fresh node now starts from a
+configuration that was validated on B580). Existing workflows keep their own saved
+values; only new nodes pick these up.
+
+| Node | Parameter | Old | New |
+|---|---|---|---|
+| Options | `n_ctx` | `2048` | **`8192`** |
+| Engine | `memory_cleanup` | `close` | **`full_cleanup`** |
+| Engine | `max_tokens` | `512` | **`2048`** |
+| Engine | `temperature` | `0.2` | **`0.1`** |
+| Engine | `top_p` | `0.95` | **`0.9`** |
+| Engine | `top_k` | `40` | **`20`** |
+| Engine | `think_display` | `show` | **`hide`** |
+
+- `n_ctx=8192` in particular: the old `2048` default could not hold a large-image
+  prefill (4000+ vision tokens) plus the first decode slot, which is the crash mode
+  documented in 2.2.0. `8192` is the tested floor.
+- Deliberately **not** changed: `verbose` (stays `False` — verbose floods the console
+  with hundreds of `find_slot` lines per image), `checkpoint_interval` (stays `4096`,
+  the llama-cpp-python default; a smaller interval was never benchmarked), and
+  `checkpoint_on_device` (stays `False` — the 2×2 benchmark showed no speed gain,
+  +50 MiB VRAM, and one fewer rollback slot).
+
 ### Notes
 - Benchmarked on Intel Arc B580 (SYCL, llama-cpp-python 0.4.3, Qwen3.5-4B, 1792×2304 /
   4032 vision tokens): none of the four new knobs changed `clip_encode`, prefill speed or

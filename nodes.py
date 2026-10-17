@@ -287,7 +287,7 @@ class LlamaCPPOptions(io.ComfyNode):
             category="LlamaCPP",
             inputs=[
                 io.Int.Input("n_gpu_layers", default=-1, min=-1, max=100, tooltip="Number of GPU layers to use", optional=True),
-                io.Int.Input("n_ctx", default=2048, min=-1, max=262144, tooltip="Context window size (0 for max, -1 for default)", optional=True),
+                io.Int.Input("n_ctx", default=8192, min=-1, max=262144, tooltip="Context window size (0 for max, -1 for default). 8192 is the tested floor for large images: a big image prefill can consume 4000+ tokens, leaving too little headroom for the first decode slot at 2048/4096.", optional=True),
                 io.Int.Input("n_threads", default=-1, min=-1, max=256, tooltip="Number of threads (-1 for auto)", optional=True),
                 io.Int.Input("n_threads_batch", default=-1, min=-1, max=256, tooltip="Number of threads per batch (-1 for auto)", optional=True),
                 io.Int.Input("n_batch", default=2048, min=-1, max=16384, tooltip="Batch size (-1 for default)", optional=True),
@@ -346,23 +346,23 @@ class LlamaCPPEngine(io.ComfyNode):
                 io.Image.Input("images", tooltip="Input image(s) for vision models (supports batches)", optional=True),
                 io.Custom("LLAMA_OPTIONS").Input("options", tooltip="Model options from Options node", optional=True),
                 io.String.Input("system_prompt", multiline=True, default="", tooltip="System prompt", optional=True),
-                io.Combo.Input("memory_cleanup", options=["close", "backend_free", "full_cleanup", "persistent"], default="close", tooltip="Memory cleanup method after generation", optional=True),
+                io.Combo.Input("memory_cleanup", options=["close", "backend_free", "full_cleanup", "persistent"], default="full_cleanup", tooltip="Memory cleanup method after generation", optional=True),
                 io.DynamicCombo.Input("response_format", options=[
                     io.DynamicCombo.Option("text", inputs=[]),
                     io.DynamicCombo.Option("json_object", inputs=[
                         io.String.Input("json_schema", multiline=True, default="{}", tooltip="JSON Schema to enforce if json_object is selected", optional=True),
                     ])
                 ], tooltip="Output format (json_object forces valid JSON)", optional=True),
-                io.Int.Input("max_tokens", default=512, min=1, max=262144, tooltip="Maximum tokens to generate", optional=True),
-                io.Float.Input("temperature", default=0.2, min=0.0, max=10.0, step=0.01, tooltip="Sampling temperature", optional=True),
-                io.Float.Input("top_p", default=0.95, min=0.0, max=1.0, step=0.01, tooltip="Top-p sampling", optional=True),
-                io.Int.Input("top_k", default=40, min=0, max=400, tooltip="Top-k sampling", optional=True),
+                io.Int.Input("max_tokens", default=2048, min=1, max=262144, tooltip="Maximum tokens to generate (2048 covers detailed image descriptions)", optional=True),
+                io.Float.Input("temperature", default=0.1, min=0.0, max=10.0, step=0.01, tooltip="Sampling temperature", optional=True),
+                io.Float.Input("top_p", default=0.9, min=0.0, max=1.0, step=0.01, tooltip="Top-p sampling", optional=True),
+                io.Int.Input("top_k", default=20, min=0, max=400, tooltip="Top-k sampling", optional=True),
                 io.Float.Input("min_p", default=0.05, min=0.0, max=1.0, step=0.01, tooltip="Min-p sampling", optional=True),
                 io.Float.Input("repeat_penalty", default=1.1, min=1.0, max=5.0, step=0.01, tooltip="Repeat penalty", optional=True),
                 io.Float.Input("present_penalty", default=0.0, min=0.0, max=5.0, step=0.01, tooltip="Present penalty", optional=True),
                 io.Float.Input("frequency_penalty", default=0.0, min=0.0, max=5.0, step=0.01, tooltip="Frequency penalty", optional=True),
                 io.Int.Input("seed", default=1, min=-sys.maxsize, max=sys.maxsize, control_after_generate=True, tooltip="Random seed", optional=True),
-                io.Combo.Input("think_display", options=["show", "hide"], default="show", tooltip="Control <think>...</think> reasoning output. 'show' keeps it in the response; 'hide' strips it so only the final answer is returned.", optional=True),
+                io.Combo.Input("think_display", options=["show", "hide"], default="hide", tooltip="Control <think>...</think> reasoning output. 'show' keeps it in the response; 'hide' strips it so only the final answer is returned.", optional=True),
             ],
             outputs=[
                 io.String.Output(display_name="RESPONSE")
@@ -370,7 +370,7 @@ class LlamaCPPEngine(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "close", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 512, temperature: float = 0.2, top_p: float = 0.95, top_k: int = 40, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = -1, think_display: str = "show") -> io.NodeOutput:
+    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "full_cleanup", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 2048, temperature: float = 0.1, top_p: float = 0.9, top_k: int = 20, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = 1, think_display: str = "hide") -> io.NodeOutput:
         global _global_llm
         try:
             # Validate inputs

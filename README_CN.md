@@ -96,7 +96,7 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 **输入**
 - **可选**：
   - `n_gpu_layers`：卸载到 GPU 的层数（默认：`-1` 表示全部）。
-  - `n_ctx`：上下文窗口大小（默认：`2048`）。
+  - `n_ctx`：上下文窗口大小（默认：`8192`；大图 prefill 单独就要吃掉 4000+ token 余量）。
   - `n_threads`：CPU 线程数（默认：`-1` 自动）。
   - `n_threads_batch`：批处理线程数（默认：`-1` 自动）。
   - `n_batch`：批大小（默认：`2048`）。
@@ -136,19 +136,19 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `images`：视觉模型的输入图像（支持批量）。
   - `options`：来自 `LlamaCPPOptions` 的选项。
   - `system_prompt`：系统指令（默认：空）。
-  - `memory_cleanup`：生成后清理内存的策略（默认：`close`）。
+  - `memory_cleanup`：生成后清理内存的策略（默认：`full_cleanup`）。
   - `response_format`：`text` 或 `json_object`（默认：`text`）。
   - `json_schema`：JSON Schema（仅在选择 `json_object` 时可用）。
-  - `max_tokens`：最大生成 token 数（默认：`512`）。
-  - `temperature`：采样温度（默认：`0.2`）。
-  - `top_p`：核采样（默认：`0.95`）。
-  - `top_k`：Top-k 采样（默认：`40`）。
+  - `max_tokens`：最大生成 token 数（默认：`2048`）。
+  - `temperature`：采样温度（默认：`0.1`）。
+  - `top_p`：核采样（默认：`0.9`）。
+  - `top_k`：Top-k 采样（默认：`20`）。
   - `min_p`：Min-p 采样（默认：`0.05`）。
   - `repeat_penalty`：重复惩罚（默认：`1.1`）。
   - `present_penalty`：Presence 惩罚（默认：`0.0`）。
   - `frequency_penalty`：Frequency 惩罚（默认：`0.0`）。
   - `seed`：随机种子（默认：`1`）。
-  - `think_display`：`show` 或 `hide`（默认 `show`）。选 `hide` 会剥离 `<think>…</think>` 推理块，只返回最终答案。可处理畸形标签（缺开标签、多个闭标签、悬空开标签）。
+  - `think_display`：`show` 或 `hide`（默认 `hide`）。选 `hide` 会剥离 `<think>…</think>` 推理块，只返回最终答案。可处理畸形标签（缺开标签、多个闭标签、悬空开标签）。
 
 **输出**
 - `RESPONSE`：生成的文本。
