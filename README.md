@@ -55,7 +55,7 @@ This fork adapts the plugin for **llama-cpp-python 0.3.39+** (MTMD rewrite) and 
 ### v2.3.0 (2026-10-17)
 - **`use_mmap` / `use_mlock` / `use_direct_io` were dead switches on 0.4.x** — they now show as `[DEPRECATED in 0.4.x]`, still work on 0.3.x, and are skipped when the build supports `load_mode`.
 - **New 0.4.x knobs exposed**: `load_mode`, `lazy_mode`, `flash_attn_type`, `vision_flash_attn` (all default `auto`).
-- **KV cache quantization**: `type_k` / `type_v` (`--cache-type-k/-v`) can cut the KV cache by ~45% (q8_0) or ~70% (q4_0). A quantized V cache requires Flash Attention — that invalid combination is rejected with a clear message.
+- **KV cache quantization**: `type_k` / `type_v` (`--cache-type-k/-v`) can cut the KV cache allocation by ~45% (`q8_0`) or ~70% (`q4_0`). A quantized V cache requires Flash Attention — that invalid combination is rejected with a clear message. **Measured: a net loss on small hybrid models** (`q8_0` = −7.4% decode speed for ~114 MiB saved on Qwen3.5-4B), so the default stays `auto`; it pays off only for large dense VLMs or very long contexts.
 - **Parameter whitelist against the installed `Llama()` signature** — one code path for 0.3.x and 0.4.x, unknown params are dropped instead of leaking into `**kwargs`.
 - **Vision token bounds no longer abort the run** — an inconsistent `vision_image_max_tokens` is dropped with a warning instead of raising.
 - **New Options inputs are appended, never inserted mid-list** — ComfyUI stores widget values positionally, so mid-list insertions corrupted existing workflows.
@@ -119,7 +119,7 @@ Configures advanced parameters for the model.
   - `lazy_mode` (**0.4.x**): Lazy tensor loading, requires mmap — `auto` / `off` / `on` (default: `auto`).
   - `flash_attn_type` (**0.4.x**): Flash Attention for the main model — `auto` / `disabled` / `enabled` (default: `auto`).
   - `vision_flash_attn` (**0.4.x**): Flash Attention inside the vision encoder — `auto` / `enabled` / `disabled` (default: `auto` = handler default).
-  - `type_k` (**0.4.x**): KV cache data type for K (`--cache-type-k`) — `auto` / `f16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl` / `bf16` (default: `auto` = f16). Quantizing shrinks the KV cache, which matters most at large `n_ctx`.
+  - `type_k` (**0.4.x**): KV cache data type for K (`--cache-type-k`) — `auto` / `f16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl` / `bf16` (default: `auto` = f16). Quantizing shrinks the KV cache allocation (reported by `llama_kv_cache: size = ...`, **not** by the compute-buffer line). Measured on B580/Qwen3.5-4B: `q8_0` costs **−7.4%** decode speed for ~114 MiB saved, so it is only worth it for large dense VLMs or very long contexts.
   - `type_v` (**0.4.x**): KV cache data type for V (`--cache-type-v`), same options. **A quantized V cache requires Flash Attention** — it is rejected when `flash_attn_type='disabled'`.
 
 > The four `0.4.x` knobs are appended at the end of the input list on purpose: ComfyUI

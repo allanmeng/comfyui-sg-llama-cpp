@@ -55,7 +55,7 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 ### v2.3.0（2026-10-17）
 - **`use_mmap` / `use_mlock` / `use_direct_io` 在 0.4.x 下是死开关** —— 现标注 `[0.4.x 已废弃]`，0.3.x 仍生效，0.4.x 下自动跳过。
 - **暴露 0.4.x 真开关**：`load_mode`、`lazy_mode`、`flash_attn_type`、`vision_flash_attn`（默认全为 `auto`）。
-- **KV cache 量化**：`type_k` / `type_v`（`--cache-type-k/-v`）可把 KV cache 缩小约 45%（q8_0）或 70%（q4_0）。V 量化必须配合 Flash Attention，这个非法组合会被插件直接拒绝并给出明确提示。
+- **KV cache 量化**：`type_k` / `type_v`（`--cache-type-k/-v`）可把 KV cache 分配缩小约 45%（q8_0）或 70%（q4_0）。V 量化必须配合 Flash Attention，该非法组合会被直接拒绝并给出明确提示。**实测：在小 hybrid 模型上是净亏**（Qwen3.5-4B 上 `q8_0` 省 114 MiB、解码 −7.4%），故默认保持 `auto`；只在大 dense VLM 或超长上下文场景才划算。
 - **按实际 `Llama()` 签名做参数白名单** —— 0.3.x 与 0.4.x 共用一套代码，不支持的参数直接丢弃而不再漏进 `**kwargs`。
 - **视觉 token 边界不再中断整次运行** —— `vision_image_max_tokens` 取值不合法时丢弃该上界并打警告，不再抛错。
 - **新增 Options 输入一律追加到列表末尾** —— ComfyUI 按位置保存 widget 值，插在中间会破坏已有工作流。
@@ -119,7 +119,7 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
   - `lazy_mode`（**0.4.x**）：懒加载张量，需配合 mmap —— `auto` / `off` / `on`（默认：`auto`）。
   - `flash_attn_type`（**0.4.x**）：主模型 Flash Attention —— `auto` / `disabled` / `enabled`（默认：`auto`）。
   - `vision_flash_attn`（**0.4.x**）：视觉编码器 Flash Attention —— `auto` / `enabled` / `disabled`（默认：`auto` 表示沿用 handler 默认）。
-  - `type_k`（**0.4.x**）：KV cache 的 K 数据类型（`--cache-type-k`）—— `auto` / `f16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl` / `bf16`（默认：`auto` 即 f16）。量化可显著缩小 KV cache，`n_ctx` 越大收益越明显。
+  - `type_k`（**0.4.x**）：KV cache 的 K 数据类型（`--cache-type-k`）—— `auto` / `f16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl` / `bf16`（默认：`auto` 即 f16）。量化可缩小 KV cache 分配（大小由 `llama_kv_cache: size = ...` 那行报告，**不在** compute buffer 那行里）。B580/Qwen3.5-4B 实测：`q8_0` 省约 114 MiB，代价是解码 **−7.4%**，因此只建议在大 dense VLM 或超长上下文下使用。
   - `type_v`（**0.4.x**）：KV cache 的 V 数据类型（`--cache-type-v`），选项同上。**V 量化强制要求 Flash Attention** —— 当 `flash_attn_type='disabled'` 时会被插件直接拒绝。
 
 > 这 4 个 0.4.x 参数刻意**追加在输入列表末尾**：ComfyUI 按位置保存工作流 widget 值。

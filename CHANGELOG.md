@@ -29,9 +29,14 @@ All notable changes to this fork are documented here.
 - **`type_k` / `type_v` KV cache quantization on `LlamaCPPOptions`** (0.4.x; maps to
   llama.cpp `--cache-type-k` / `--cache-type-v`, i.e. a `ggml_type` value). Defaults
   `auto` = the library default `f16`, so behaviour is unchanged unless opted in.
-  Quantizing shrinks the KV cache proportionally to bits per element, which matters most
-  at large `n_ctx`: for a Qwen3.5-4B at `n_ctx=8192` the f16 KV cache is ~256 MiB, so
-  `q8_0` saves ~114 MiB and `q4_0` ~181 MiB — 22–35% of a ~513 MiB compute buffer.
+  Quantizing shrinks the KV cache allocation proportionally to bits per element, which
+  matters most at large `n_ctx`. For a Qwen3.5-4B at `n_ctx=8192` the f16 KV cache is
+  ~256 MiB (only 8 of its 32 layers are full attention), so `q8_0` saves ~114 MiB and
+  `q4_0` ~181 MiB.
+  - **The KV cache is NOT part of the `SYCL0 compute buffer size` line** in the logs —
+    that number is the graph compute scratch buffer. KV lives in its own allocation and
+    is reported by `llama_kv_cache: size = ... K (type): ... MiB, V (type): ... MiB`,
+    which only prints with `verbose=true`. Do not expect the compute buffer to shrink.
   - **A quantized V cache requires Flash Attention.** `llama-context.cpp` refuses to
     build the context (`"V cache quantization requires flash_attn"`) when
     `flash_attn_type` is `disabled`; the plugin now rejects that combination up front
@@ -69,13 +74,39 @@ values; only new nodes pick these up.
   `checkpoint_on_device` (stays `False` — the 2×2 benchmark showed no speed gain,
   +50 MiB VRAM, and one fewer rollback slot).
 
-### Notes
-- Benchmarked on Intel Arc B580 (SYCL, llama-cpp-python 0.4.3, Qwen3.5-4B, 1792×2304 /
-  4032 vision tokens): none of the four new knobs changed `clip_encode`, prefill speed or
-  token throughput beyond run-to-run noise (`clip_encode` spread ≤1.4%, ~11.0 s in all
-  configurations). `vision_flash_attn=enabled` was not faster than `disabled`.
-  Defaults therefore stay `auto` — these are exposed for tuning and future hardware, not
-  as a speed-up.
+### Notes — measured on B580
+Environment: Intel Arc B580 (SYCL), llama-cpp-python 0.4.3, Qwen3.5-4B-Uncensored Q4_K_M,
+1792×2304 image (4032 vision tokens), `n_ctx=8192`.
+
+**0.4.x load / attention knobs: no measurable effect.**
+None of `load_mode`, `lazy_mode`, `flash_attn_type` or `vision_flash_attn` changed
+`clip_encode`, prefill speed or token throughput beyond run-to-run noise
+(`clip_encode` spread ≤1.4%, ~11.0 s in every configuration). `vision_flash_attn=enabled`
+was not faster than `disabled`. Defaults stay `auto`.
+
+**KV cache quantization: works, but a net loss on this model.**
+
+| `type_k` / `type_v` | eval | vs baseline |
+|---|---|---|
+| `auto` / `auto` (f16) | **85.59 t/s** (11.68 ms/tok) | — |
+| `q8_0` / `q8_0` | 79.22 t/s (12.62 ms/tok) | **−7.4%** |
+| `q4_0` / `q4_0` | 78.70 t/s (12.71 ms/tok) | −8.0% |
+| `q8_0` / `auto` (K only) | 82.22 t/s (12.16 ms/tok) | **−3.9%** |
+
+- The quantization demonstrably reaches llama.cpp: quantizing **K only** costs almost
+  exactly half of quantizing K+V, which is the expected dose-response if the decode loop
+  has to dequantize the whole history on every token.
+- `q4_0` is barely cheaper than `q8_0` in speed terms — the dequantize cost does not
+  shrink with precision, so there is no benefit in going below `q8_0`.
+- The `SYCL0 compute buffer` stayed at 513.0–513.3 MiB in every run, confirming KV is a
+  separate allocation (see the note under `type_k`/`type_v`).
+- Why it loses here: this model has only 8 of 32 layers with KV (the rest are SSM), so
+  the f16 KV cache is just ~256 MiB — saving 114 MiB is invisible on a 12 GB card while
+  costing 7% of decode speed.
+- **Conclusion: keep `auto`.** The knobs are meant for large dense VLMs and very long
+  contexts, where the KV cache reaches gigabytes. The invalid-combination guard
+  (`type_v` quantized + `flash_attn_type=disabled`) does work and fails in 0.57 s with an
+  actionable message.
 
 ## [2.2.0] — 2026-08-22
 > Renumbered from an incorrect `1.7.0` label: the latest release tag was `v2.1.0`,
