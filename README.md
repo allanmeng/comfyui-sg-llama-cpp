@@ -1,282 +1,276 @@
-[中文](README_CN.md) | English
+中文 | [English](README_EN.md)
 
 # comfyui-sg-llama-cpp
 
-Run GGUF language and vision models inside ComfyUI. Tuned for **Intel Arc / Iris Xe (SYCL)**,
-extended with a **batch captioning pipeline** for LoRA datasets.
+在 ComfyUI 里跑 GGUF 语言模型与视觉模型。针对 **Intel Arc / Iris Xe（SYCL）** 调优，并内置一条
+**批量打标流水线**，直接产出 LoRA 数据集。
 
-![Node preview](assets/node_preview.png)
+![节点预览](assets/node_preview.png)
 
-The pack does two jobs:
+这个插件干两件事：
 
-| Job | Wiring | Use case |
+| 用途 | 接线 | 典型场景 |
 |---|---|---|
-| Single-image inference | Model Loader → Options → Engine | describe an image, rewrite a prompt, ask a question about a picture |
-| Batch captioning | Image Folder Loader → Engine → Caption Saver | one `.txt` per image, for a LoRA dataset |
+| 单图推理 | Model Loader → Options → Engine | 描述图片、改写提示词、就一张图提问 |
+| 批量打标 | Image Folder Loader → Engine → Caption Saver | 每张图一份 `.txt`，喂给 LoRA 训练 |
 
-Both share the same engine and the same GGUF. No third-party nodes are required for either.
+两者共用同一个引擎、同一份 GGUF，**都不依赖任何第三方节点**。
 
 ---
 
-## Contents
+## 目录
 
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Node reference](#node-reference)
-- [Model discovery](#model-discovery)
-- [Batch captioning in practice](#batch-captioning-in-practice)
-- [Measured on Intel Arc B580](#measured-on-intel-arc-b580)
-- [Troubleshooting](#troubleshooting)
-- [What this fork changes](#what-this-fork-changes)
-- [License and links](#license-and-links)
+- [环境要求](#环境要求)
+- [安装](#安装)
+- [快速上手](#快速上手)
+- [节点参考](#节点参考)
+- [模型目录](#模型目录)
+- [批量打标的实践细节](#批量打标的实践细节)
+- [B580 实测数据](#b580-实测数据)
+- [故障排查](#故障排查)
+- [本分支相对上游改了什么](#本分支相对上游改了什么)
+- [许可与链接](#许可与链接)
 
 ---
 
-## Requirements
+## 环境要求
 
-| Component | Requirement | Notes |
+| 组件 | 要求 | 说明 |
 |---|---|---|
-| ComfyUI | a build shipping `comfy_api.latest` | these nodes use the V3 schema API (`define_schema`), not the legacy `INPUT_TYPES` |
-| llama-cpp-python | **>= 0.3.39** | 0.3.39+ is required (MTMD rewrite); 0.4.x additionally unlocks `load_mode`, KV quantization and `reasoning_budget` |
-| GPU backend | SYCL wheel for Intel Arc | JamePeng's releases have **no** SYCL builds — see below |
+| ComfyUI | 包含 `comfy_api.latest` 的版本 | 本插件使用 V3 schema（`define_schema`），不是旧的 `INPUT_TYPES` |
+| llama-cpp-python | **>= 0.3.39** | 0.3.39+ 是硬性要求（MTMD 重写）；0.4.x 额外解锁 `load_mode`、KV 量化和 `reasoning_budget` |
+| 显卡后端 | Intel Arc 用 SYCL wheel | JamePeng 的 release **不含** SYCL 构建，见下文 |
 
-The plugin detects what the installed `llama-cpp-python` supports **from its function
-signatures, not from the version string**, and drops parameters the build does not know about.
-One install of this plugin serves 0.3.x and 0.4.x alike; unsupported widgets simply do nothing.
+插件**从函数签名而不是版本号**判断已安装的 `llama-cpp-python` 支持什么，不认识的参数会被丢弃。
+所以 0.3.x 和 0.4.x 共用一份代码，用不上的控件只是不起作用，不会报错。
 
-## Installation
+## 安装
 
-### 1. Install a wheel
+### 1. 装 wheel
 
-**Intel GPU (SYCL)** — prebuilt Windows wheels:
+**Intel GPU（SYCL）** —— 预编译 Windows wheel：
 
 ```
 https://github.com/allanmeng/llama-cpp-python-sycl-windows
 ```
 
-**Other backends (CUDA / CPU / Vulkan):**
+**其他后端（CUDA / CPU / Vulkan）：**
 
 ```
 https://github.com/JamePeng/llama-cpp-python/releases
 ```
 
-### 2. Clone the node pack
+### 2. 克隆插件
 
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 ```
 
-### 3. Restart ComfyUI
+### 3. 重启 ComfyUI
 
-Both nodes appear under the `LlamaCPP` category (`LlamaCPP/Dataset` for the captioning pair).
+节点出现在 `LlamaCPP` 分类下（打标那一对在 `LlamaCPP/Dataset`）。
 
-### Upgrading from llama-cpp-python 0.3.38 or earlier
+### 从 llama-cpp-python 0.3.38 或更早版本升级
 
-Do **not** use `pip install --upgrade`. Stale DLLs left in `lib/` collide with the new build:
+**不要**用 `pip install --upgrade`。旧版本残留在 `lib/` 里的 DLL 会和新版本冲突：
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-<version>-<your-build>.whl
+pip install llama_cpp_python-<版本>-<你的构建>.whl
 ```
 
-> On Windows, the 0.3.39+ MTMD rewrite moved vision handling into `GenericMTMDChatHandler`
-> and replaced `clip_model_path` with `mmproj_path`. Installing a 0.3.39+ wheel over a 0.3.38
-> install without uninstalling first is the most common cause of "the node loads but vision
-> output is garbage".
+> 在 Windows 上，0.3.39+ 的 MTMD 重写把视觉处理搬进了 `GenericMTMDChatHandler`，并用
+> `mmproj_path` 取代了 `clip_model_path`。不先卸载、直接覆盖安装到 0.3.38 之上，是
+> “节点能加载但视觉输出全是乱码”最常见的原因。
 
-### 4. Optional configuration
+### 4. 可选配置
 
-Drop a `config.json` next to `__init__.py` to add model folders or hide noise — see
-[Model discovery](#model-discovery). The plugin works without it.
+在 `__init__.py` 同级放一个 `config.json`，可以追加模型目录、过滤无关 GGUF —— 见
+[模型目录](#模型目录)。不放也能正常工作。
 
 ---
 
-## Quick start
+## 快速上手
 
-### Describing a single image
+### 描述单张图片
 
 ```
 Llama CPP Model Loader ── MODEL ────┐
-   model_name      = <your model>.gguf
-   mmproj_model_name = <your mmproj>.gguf   ← required for images
+   model_name      = <你的模型>.gguf
+   mmproj_model_name = <你的 mmproj>.gguf   ← 要读图必须接
                                      │
 Llama CPP Options ────── OPTIONS ────┤
    n_ctx = 8192                      │
                                      ▼
-                              Llama CPP Engine ── RESPONSE ──► (Show Text / preview)
+                              Llama CPP Engine ── RESPONSE ──► (Show Text / 预览)
                                  images       = Load Image
-                                 prompt       = "Describe this image in detail."
+                                 prompt       = "详细描述这张图片。"
                                  system_prompt = ""
 ```
 
-The checked-in `demo_workflow_llama-cpp-python_0.3.39+.json` is this graph. It uses
-`ShowText|pysssss` from [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts),
-so install that pack if you want to load the file as-is, and swap its `Load Image` source.
+仓库里的 `demo_workflow_llama-cpp-python_0.3.39+.json` 就是这张图。它用了
+[ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) 的
+`ShowText|pysssss`，想直接加载就一起装，并把里面的 `Load Image` 换成你自己的图。
 
-**The four settings that actually matter**
+**真正影响结果的四个设置**
 
-| Setting | Where | Why |
+| 设置 | 位置 | 原因 |
 |---|---|---|
-| `mmproj_model_name` | Model Loader | without it the model runs text-only and `images` is ignored |
-| `n_ctx = 8192` | Options | one large image is 4000+ vision tokens; the old `2048` default cannot hold it |
-| `max_tokens = 2048` | Engine | a detailed description is easily 500+ tokens, and reasoning models spend budget before the answer |
-| `think_display = hide` | Engine | strips the `<think>` block so `RESPONSE` is the answer, not the monologue |
+| `mmproj_model_name` | Model Loader | 不接就只跑纯文本，`images` 会被忽略 |
+| `n_ctx = 8192` | Options | 一张大图的视觉 token 就有 4000+，旧的 `2048` 默认值装不下 |
+| `max_tokens = 2048` | Engine | 详细描述轻松超过 500 token，推理模型还会先花预算思考 |
+| `think_display = hide` | Engine | 剥掉 `<think>` 块，让 `RESPONSE` 是答案而不是自说自话 |
 
-Leave `chat_format` at its default. For vision models the handler is chosen automatically
-from the `mmproj` file; the combo only matters for text-only models with an unusual template.
+`chat_format` 保持默认即可。视觉模型的处理方式是根据 `mmproj` 文件自动选的，这个下拉框只对
+模板特殊的纯文本模型有意义。
 
-### Batch captioning a folder
+### 批量打标一个目录
 
 ```
 Llama CPP Image Folder Loader ── images ──┐
-   folder_path = path to images            │
+   folder_path = 图片目录                   │
    max_side    = 1024                      ├──► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
-   max_images  = 0  (0 = all)              │       (runs once per image,            (writes one .txt per image,
-                              └─ paths  ───┘        one caption each)               next to the source image)
+   max_images  = 0  (0 = 全部)             │       （每张图执行一次，            （每张图写一份 .txt，
+                              └─ paths  ───┘        各产出一条标注）              默认写在原图旁边）
 ```
 
-Run it once with `max_images = 3` before a full batch. Details and recommended settings:
-[Batch captioning in practice](#batch-captioning-in-practice).
+正式跑之前先设 `max_images = 3` 验证一遍。推荐参数见
+[批量打标的实践细节](#批量打标的实践细节)。
 
 ---
 
-## Node reference
+## 节点参考
 
 ### Llama CPP Model Loader
 
-`LlamaCPP` · outputs `MODEL`
+`LlamaCPP` · 输出 `MODEL`
 
-| Input | Req | Default | Notes |
+| 输入 | 必填 | 默认 | 说明 |
 |---|:--:|---|---|
-| `model_name` | yes | — | every `.gguf` found by the [model scan](#model-discovery) except files with `mmproj` in the name |
-| `chat_format` | no | `llama-2` | only used for text-only models; vision models pick their handler from the mmproj |
-| `mmproj_model_name` | no | `None` | files with `mmproj` in the name. `None` = text-only |
+| `model_name` | 是 | — | [扫描](#模型目录)到的所有 `.gguf`，排除文件名含 `mmproj` 的 |
+| `chat_format` | 否 | `llama-2` | 只对纯文本模型生效；视觉模型的 handler 由 mmproj 决定 |
+| `mmproj_model_name` | 否 | `None` | 文件名含 `mmproj` 的文件。选 `None` = 纯文本 |
 
 ### Llama CPP Options
 
-`LlamaCPP` · outputs `OPTIONS`
+`LlamaCPP` · 输出 `OPTIONS`
 
-**Core**
+**基础**
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `n_gpu_layers` | `-1` | `-1` = offload everything |
-| `n_ctx` | `8192` | raise it for large images or long prompts. `8192` is the tested floor |
-| `n_threads` / `n_threads_batch` | `-1` | `-1` = auto |
-| `n_batch` / `n_ubatch` | `2048` / `512` | larger `n_batch` speeds up prefill at the cost of memory |
-| `main_gpu` | `0` | device index |
-| `offload_kqv` | on | keep K/Q/V on the GPU |
-| `numa` | off | NUMA affinity (multi-socket hosts) |
-| `verbose` | off | floods the console with per-tensor and per-token lines. When on, the resolved tuning parameters are echoed back |
+| `n_gpu_layers` | `-1` | `-1` = 全部层放显卡 |
+| `n_ctx` | `8192` | 大图或长提示词要往上加。`8192` 是实测可用下限 |
+| `n_threads` / `n_threads_batch` | `-1` | `-1` = 自动 |
+| `n_batch` / `n_ubatch` | `2048` / `512` | `n_batch` 加大能加快 prefill，代价是内存 |
+| `main_gpu` | `0` | 设备序号 |
+| `offload_kqv` | 开 | K/Q/V 留在显卡 |
+| `numa` | 关 | NUMA 亲和（多路主机） |
+| `verbose` | 关 | 会把每个张量、每个 token 都打到控制台。开启时会回显最终生效的调优参数 |
 
-**Vision**
+**视觉**
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `vision_use_gpu` | on | run the vision encoder on the GPU |
-| `vision_image_min_tokens` | `1024` | Qwen-VL's minimum. `-1` = handler default |
-| `vision_image_max_tokens` | `-1` | `-1` = handler default. Must be `-1` or `>= min_tokens`; an inconsistent value is dropped with a warning instead of aborting the run |
+| `vision_use_gpu` | 开 | 视觉编码器放显卡 |
+| `vision_image_min_tokens` | `1024` | Qwen-VL 的最低要求。`-1` = 用 handler 默认 |
+| `vision_image_max_tokens` | `-1` | `-1` = 用 handler 默认。必须是 `-1` 或 `>= min_tokens`；数值矛盾时丢弃并告警，不会中断整批 |
 
-**Hybrid / recurrent models (Qwen3.5 and friends)**
+**混合 / 循环模型（Qwen3.5 之类）**
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `ctx_checkpoints` | `-1` | `-1` = llama-cpp-python default (16). **Do not use `0`** — it hits a buggy fast-path that crashes on large images |
-| `checkpoint_interval` | `4096` | checkpoint token interval |
-| `checkpoint_on_device` | off | keeps checkpoint payloads in VRAM (~50 MiB each). Benchmarked: no throughput change, so off is fine |
+| `ctx_checkpoints` | `-1` | `-1` = 用 llama-cpp-python 默认值（16）。**不要用 `0`** —— 会走一条有 bug 的快路径，大图直接崩 |
+| `checkpoint_interval` | `4096` | checkpoint 的 token 间隔 |
+| `checkpoint_on_device` | 关 | checkpoint 负载放显存（每个约 50 MiB）。实测不影响吞吐，关着就行 |
 
-**Load strategy** (`llama-cpp-python` 0.4.x only; ignored by 0.3.x)
+**加载策略**（仅 `llama-cpp-python` 0.4.x；0.3.x 自动忽略）
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `use_mmap` / `use_mlock` / `use_direct_io` | on / off / off | **[DEPRECATED in 0.4.x]** removed from the 0.4.x load path. Still honored by 0.3.x. On 0.4.x use `load_mode` |
+| `use_mmap` / `use_mlock` / `use_direct_io` | 开 / 关 / 关 | **[0.4.x 已废弃]** 0.4.x 的加载路径里已经没有它们。0.3.x 仍然生效。0.4.x 请用 `load_mode` |
 | `load_mode` | `auto` | `auto` / `none` / `mmap` / `mlock` / `mmap_mlock` / `direct_io` |
-| `lazy_mode` | `auto` | `auto` / `off` / `on`. Requires mmap |
-| `flash_attn_type` | `auto` | Flash Attention for the main model: `auto` / `disabled` / `enabled` |
-| `vision_flash_attn` | `auto` | Flash Attention inside the vision encoder: `auto` / `enabled` / `disabled` |
-| `type_k` / `type_v` | `auto` | KV cache data type: `auto` / `f16` / `bf16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl`. `auto` = f16. **A quantized `type_v` requires Flash Attention** — the combination with `flash_attn_type=disabled` is rejected up front. See [the measurement](#measured-on-intel-arc-b580) before enabling it |
+| `lazy_mode` | `auto` | `auto` / `off` / `on`，依赖 mmap |
+| `flash_attn_type` | `auto` | 主模型的 Flash Attention：`auto` / `disabled` / `enabled` |
+| `vision_flash_attn` | `auto` | 视觉编码器内的 Flash Attention：`auto` / `enabled` / `disabled` |
+| `type_k` / `type_v` | `auto` | KV cache 数据类型：`auto` / `f16` / `bf16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl`。`auto` = f16。**量化 V 必须开 Flash Attention**，与 `flash_attn_type=disabled` 的组合会在加载前被拒绝。开之前先看[实测结论](#b580-实测数据) |
 
-> The 0.4.x inputs are **appended at the end** of the parameter list on purpose. ComfyUI
-> stores widget values positionally, so inserting them earlier would shift every value of
-> every workflow saved before the upgrade.
+> 0.4.x 的这些输入是**故意追加在参数列表末尾**的。ComfyUI 按位置存储工作流的控件值，
+> 插在中间会让升级前保存的每个工作流的值整体错位。
 
 ### Llama CPP Engine
 
-`LlamaCPP` · outputs `RESPONSE`
+`LlamaCPP` · 输出 `RESPONSE`
 
-**Generation**
+**生成**
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `model` / `prompt` | — | required |
-| `images` | — | single image or batch |
-| `options` | — | from the Options node |
-| `system_prompt` | empty | |
-| `response_format` | `text` | `text` or `json_object`. `json_object` reveals a `json_schema` field that constrains the output to valid JSON |
-| `max_tokens` | `2048` | raise it if the answer gets cut off |
-| `memory_cleanup` | `full_cleanup` | `close` / `backend_free` / `full_cleanup` / `persistent`. See [memory strategy](#memory-strategy) |
-| `think_display` | `hide` | `hide` returns only the text after the last `</think>`; `show` keeps the block. Handles malformed tags (missing opening, doubled closing, dangling open) |
-| `reasoning_budget` | `-1` | 0.4.x only. Caps the first `<think>` block at N tokens: `-1` = library default, `0` = close it immediately, `N` = at most N reasoning tokens |
+| `model` / `prompt` | — | 必填 |
+| `images` | — | 单张或一批 |
+| `options` | — | 来自 Options 节点 |
+| `system_prompt` | 空 | |
+| `response_format` | `text` | `text` 或 `json_object`。选 `json_object` 会展开 `json_schema` 字段，把输出约束成合法 JSON |
+| `max_tokens` | `2048` | 答案被截断就往上加 |
+| `memory_cleanup` | `full_cleanup` | `close` / `backend_free` / `full_cleanup` / `persistent`，见[显存策略](#显存策略) |
+| `think_display` | `hide` | `hide` 只返回最后一个 `</think>` 之后的正文；`show` 保留整个思考块。能处理畸形标签（缺失开标签、重复闭标签、悬空开标签） |
+| `reasoning_budget` | `-1` | 仅 0.4.x。限制第一个 `<think>` 块的 token 数：`-1` = 库默认，`0` = 立刻收尾，`N` = 最多 N 个思考 token |
 
-**Sampling**
+**采样**
 
-| Input | Default | | Input | Default |
+| 输入 | 默认 | | 输入 | 默认 |
 |---|---|---|---|---|
 | `temperature` | `0.1` | | `repeat_penalty` | `1.1` |
 | `top_p` | `0.9` | | `present_penalty` | `0.0` |
 | `top_k` | `20` | | `frequency_penalty` | `0.0` |
-| `min_p` | `0.05` | | `seed` | `1` (with control-after-generate) |
+| `min_p` | `0.05` | | `seed` | `1`（带生成后控制） |
 
 ### Llama CPP Memory Cleanup
 
-`LlamaCPP` · outputs `PASSTHROUGH` (the input, unchanged)
+`LlamaCPP` · 输出 `PASSTHROUGH`（原样透传输入）
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
 | `memory_cleanup` | `close` | `close` / `backend_free` / `full_cleanup` / `persistent` |
-| `passthrough` | — | optional; lets you splice this node into a chain without breaking the graph |
+| `passthrough` | — | 可选，用来把本节点串进已有链条而不打断连线 |
 
 ### Llama CPP Image Folder Loader
 
-`LlamaCPP/Dataset` · outputs `images` (list), `paths` (list), `count`
+`LlamaCPP/Dataset` · 输出 `images`（列表）、`paths`（列表）、`count`
 
-Emits a **list**, one item per file. That is the whole point: a downstream node without
-`INPUT_IS_LIST` then runs once per image. A folder loader that emits a *tensor batch*
-instead puts every image into a single request and runs out of context on the first try.
+输出的是**列表**，一个文件一项。这是关键：下游没有 `INPUT_IS_LIST` 的节点因此会对每张图各执行
+一次。反过来，如果目录加载器输出的是**张量批**，N 张图会被塞进同一条请求，第一次就因为上下文
+不足而失败。
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `folder_path` | empty | absolute path used as-is; relative resolves under `ComfyUI/input` |
-| `extensions` | `png,jpg,jpeg,webp,bmp` | comma separated |
-| `recursive` | on | scan sub-folders |
-| `sort_order` | `natural` | `natural` (2 before 10) / `name` / `modified` / `none` |
-| `max_images` | `0` | `0` = all. Set a small number to validate the graph first |
-| `start_index` | `0` | skip the first N after sorting, to resume an interrupted run |
-| `max_side` | `0` | downscale so the longest side is at most N pixels (`0` = keep original). The cheapest lever on vision token count and base64 size; `1024` is a good captioning default |
+| `folder_path` | 空 | 绝对路径原样使用；相对路径解析到 `ComfyUI/input` 下 |
+| `extensions` | `png,jpg,jpeg,webp,bmp` | 逗号分隔 |
+| `recursive` | 开 | 扫子目录 |
+| `sort_order` | `natural` | `natural`（2 排在 10 前）/ `name` / `modified` / `none` |
+| `max_images` | `0` | `0` = 全部。先设小值验证工作流 |
+| `start_index` | `0` | 排序后跳过前 N 张，用于中断后续跑 |
+| `max_side` | `0` | 长边超过 N 就等比缩小（`0` = 保持原尺寸）。这是降低视觉 token 数和 base64 体积最省事的手段，打标场景 `1024` 是个好默认值 |
 
-Images are EXIF-rotated upright and transparent pixels are composited onto white (not black).
-An undecodable file is skipped with a warning instead of aborting the batch.
+图片会按 EXIF 转正，透明像素合成到白色（不是黑色）。无法解码的文件跳过并告警，不会中断整批。
 
 ### Llama CPP Caption Saver
 
-`LlamaCPP/Dataset` · outputs `saved`, `skipped`
+`LlamaCPP/Dataset` · 输出 `saved`、`skipped`
 
-Writes one `.txt` per caption, **next to the source image with the same stem**
-(`abc.png` → `abc.txt`) — the pairing kohya-style trainers expect. Images are never
-re-encoded or renamed.
+每份标注写一个 `.txt`，默认落在**原图同目录、同文件名**（`abc.png` → `abc.txt`），这正是 kohya
+系训练器期望的配对方式。图片不会被重新编码，也不会被改名。
 
-| Input | Default | Notes |
+| 输入 | 默认 | 说明 |
 |---|---|---|
-| `text` | — | `RESPONSE` from the engine |
-| `paths` | — | `paths` from the loader. Unconnected = numbered files (`caption_00000.txt`, ...) inside `output_dir` |
-| `output_dir` | empty | empty = beside each source image; relative resolves under `ComfyUI/input` |
-| `skip_on_error` | on | drops captions that are the engine's error string (`Error generating response: ...`). Without it a failed image silently becomes a garbage caption |
-| `skip_empty` | on | drops blank captions |
+| `text` | — | 引擎的 `RESPONSE` |
+| `paths` | — | 加载器的 `paths`。不接则改为在 `output_dir` 里写编号文件（`caption_00000.txt` …） |
+| `output_dir` | 空 | 空 = 写在每张原图旁边；相对路径解析到 `ComfyUI/input` 下 |
+| `skip_on_error` | 开 | 丢弃内容为引擎报错串（`Error generating response: ...`）的标注。不开的话，某张图失败时错误信息会被当成标注写进数据集 |
+| `skip_empty` | 开 | 丢弃空标注 |
 
-Files are UTF-8 with `\n` endings and no BOM, and every write is echoed so a batch can be
-audited afterwards:
+文件以 UTF-8、`\n` 换行、无 BOM 写入，每次写入都会回显，便于跑完复盘：
 
 ```
 [llama_cpp dataset] caption saved: ...\ComfyUI_1057334871997372_.txt (223 chars)
@@ -285,24 +279,24 @@ audited afterwards:
 
 ---
 
-## Model discovery
+## 模型目录
 
-`.gguf` files are picked up **recursively** from:
+以下目录中的 `.gguf` 会被**递归**扫描：
 
-| Source | Path | Auto |
+| 来源 | 路径 | 自动 |
 |---|---|:--:|
-| ComfyUI text encoders | `ComfyUI/models/text_encoders/` and `ComfyUI/models/clip/` | yes |
-| Dedicated LLM folder | `ComfyUI/models/LLM/` | yes |
-| Custom folders | any path in `config.json` | no |
+| ComfyUI 文本编码器 | `ComfyUI/models/text_encoders/` 和 `ComfyUI/models/clip/` | 是 |
+| 专用 LLM 目录 | `ComfyUI/models/LLM/` | 是 |
+| 自定义目录 | `config.json` 里写的任意路径 | 否 |
 
-Files are then split into two dropdowns by name:
+扫到的文件再按文件名分进两个下拉框：
 
-- **Model dropdown** — every `.gguf` whose filename does not contain `mmproj`
-- **mmproj dropdown** — every `.gguf` whose filename contains `mmproj`
+- **模型下拉框** —— 文件名不含 `mmproj` 的所有 `.gguf`
+- **mmproj 下拉框** —— 文件名含 `mmproj` 的所有 `.gguf`
 
-Location does not matter for `mmproj` files; only the keyword in the filename does.
+`mmproj` 文件放在哪个子目录都行，只看文件名里有没有这个关键词。
 
-### Recommended layout
+### 推荐布局
 
 ```
 ComfyUI/models/LLM/
@@ -315,7 +309,7 @@ ComfyUI/models/LLM/
 
 ### config.json
 
-Optional. Without it the plugin only scans the ComfyUI model folders.
+可选。没有它时只扫 ComfyUI 自己的模型目录。
 
 ```json
 {
@@ -331,109 +325,99 @@ Optional. Without it the plugin only scans the ComfyUI model folders.
 }
 ```
 
-- Absolute and relative paths are both accepted; non-existent paths are filtered out silently.
-- `model_folders` is scanned in addition to the auto-detected folders, never instead of them.
-- `exclude_patterns` is a list of **case-insensitive substrings** matched against each model's
-  path relative to its search folder. Matches disappear from **both** dropdowns, models and
-  mmproj alike. Use it when `model_folders` points at a directory shared with a diffusion or
-  video loader — llama.cpp cannot run those GGUFs, they only lengthen the list.
+- 绝对路径和相对路径都行；不存在的路径会被静默过滤。
+- `model_folders` 是在自动目录**之外追加**，不是替换。
+- `exclude_patterns` 是一组**大小写不敏感的子串**，匹配模型相对于其搜索根目录的路径。命中的文件
+  会同时从**模型和 mmproj 两个下拉框**里消失。典型用法：`model_folders` 指向了一个和扩散模型、
+  视频模型共用的目录 —— llama.cpp 跑不了那些 GGUF，它们只会把列表拉长。
 
-See `config.example.json`.
+示例见 `config.example.json`。
 
 ---
 
-## Batch captioning in practice
+## 批量打标的实践细节
 
-### Memory strategy
+### 显存策略
 
-| `memory_cleanup` | Behaviour | Batch captioning |
+| `memory_cleanup` | 行为 | 批量打标 |
 |---|---|---|
-| `full_cleanup` | releases the model after every generation, reloads on the next one | **default.** On a 4B-class model the reload costs ~2 s per image, which is far cheaper than the alternative |
-| `persistent` | keeps the model resident between runs | measured **~26× slower** on a hybrid vision model. Prefix/KV reuse on a hybrid (recurrent) architecture carries an overhead that dwarfs the load it saves. Do not use it for tagging |
-| `close` / `backend_free` | lighter versions of the teardown | fine for one-off runs, not for batches |
+| `full_cleanup` | 每次生成后释放模型，下次重新加载 | **默认值。** 4B 级模型重载约 2 秒，远比其他方案便宜 |
+| `persistent` | 模型常驻 | 在混合视觉模型上实测**慢约 26 倍**。混合（循环）架构下的前缀/KV 复用开销远大于它省下的加载时间。打标不要用 |
+| `close` / `backend_free` | 更轻的清理 | 单次跑可以，批量不建议 |
 
-The loader is `not_idempotent`, so adding images to the folder is picked up without restarting
-ComfyUI.
+加载器是 `not_idempotent` 的，所以往目录里加了图不用重启 ComfyUI。
 
-### Per-image timing
+### 单图耗时
 
-Every generation prints one line, **regardless of `verbose`**:
+每次生成都会打印一行，**与 `verbose` 无关**：
 
 ```
 [llama_cpp] image timing | load 2.20s | generate 5.72s | total 7.93s | prompt 252 tok, out 60 tok (10.5 tok/s)
 ```
 
-`verbose` exists but is not usable for measuring a batch: llama.cpp prints hundreds of
-`find_slot` / per-tensor lines per image, and ComfyUI itself only reports one
-`Prompt executed in X seconds` for the whole run. This line is what makes `N images × per-image
-cost` visible.
+`verbose` 不适合用来测批量：llama.cpp 每张图都会打几百行 `find_slot` 和张量日志，而 ComfyUI
+本身只对整轮给一句 `Prompt executed in X seconds`。这一行才是让「N 张图 × 单图成本」可见的东西。
 
-### Caption hygiene
+### 标注卫生
 
-- One paragraph, one line, UTF-8, no BOM. `str.strip()` does not remove U+FEFF, so a BOM that
-  reaches the response would be written to disk — check the first bytes if a tokenizer
-  complains about an extra token at position 0.
-- Keep the language and style of your captions identical to the prompts you will use at
-  inference time. A tag list in training and a sentence at inference is one of the most
-  common reasons a LoRA underperforms.
-- Watch the unit-count, not the character count: what matters is that every *variable*
-  attribute (clothing, background, framing) is written down, so the model does not bind it to
-  the trigger word.
+- 一段话、一行、UTF-8、无 BOM。注意 `str.strip()` **不会**去掉 U+FEFF，所以只要 BOM 出现在响应里
+  就会被原样写盘 —— tokenizer 抱怨第 0 位多了个 token 时，先查文件头字节。
+- 标注的语言和句式，必须和你推理时写的提示词一致。训练用标签串、推理用长句，是 LoRA 训不出来
+  最常见的原因之一。
+- 看「写全了哪些维度」而不是「写了多少字」：每个**变量**属性（服装、背景、景别）都要写出来，
+  否则模型只能把它绑到触发词上。
 
-### Recommended first run
+### 第一次跑的建议参数
 
-| Setting | Value | Why |
+| 设置 | 值 | 原因 |
 |---|---|---|
-| `max_images` | `3` | validate the graph and read three captions before paying for the whole folder |
-| `max_side` | `1024` | a 2000 px image is ~4× the vision tokens of a 1000 px one, for no gain in caption quality |
-| `n_ctx` | `8192` | headroom for one large-image prefill plus the answer |
-| `max_tokens` | `512`–`2048` | too small and the answer is cut mid-sentence; a truncated reasoning block is worse than a short answer, so also set `reasoning_budget` |
-| `reasoning_budget` | `256`–`512` | stops thinking from eating the whole budget. Must sit **well below** `max_tokens`, otherwise the forced `</think>` is never reached |
+| `max_images` | `3` | 先验证接线、读三条标注，再花时间跑整个目录 |
+| `max_side` | `1024` | 2000 px 的图视觉 token 约是 1000 px 的 4 倍，标注质量并没有提升 |
+| `n_ctx` | `8192` | 给一张大图的 prefill 加答案留余量 |
+| `max_tokens` | `512`–`2048` | 太小会把答案截在半句；而被截断的思考块比短答案更糟，所以同时设 `reasoning_budget` |
+| `reasoning_budget` | `256`–`512` | 防止思考吃掉整个预算。必须**明显小于** `max_tokens`，否则强制收尾的 `</think>` 永远到不了 |
 
-Add `sort_order = modified` if you just generated the images and want them in creation order.
+如果图是刚生成的、想按生成顺序打标，把 `sort_order` 设成 `modified`。
 
 ---
 
-## Measured on Intel Arc B580
+## B580 实测数据
 
-Environment: Arc B580 (12 GB, SYCL), llama-cpp-python 0.4.3, Qwen3.5-4B-Uncensored Q4_K_M,
-1792×2304 image (4032 vision tokens), `n_ctx=8192`. Numbers are single-machine; treat them as
-direction, not as a spec. Nothing here was measured on Arc B70 or on non-Intel backends.
+环境：Arc B580（12 GB，SYCL）、llama-cpp-python 0.4.3、Qwen3.5-4B-Uncensored Q4_K_M、
+1792×2304 图片（4032 视觉 token）、`n_ctx=8192`。单机数据，看方向不要当规格。**没有在 Arc B70
+或非 Intel 后端上测过。**
 
-**The 0.4.x tuning knobs are not a speed-up.** `load_mode`, `lazy_mode`, `flash_attn_type` and
-`vision_flash_attn` changed `clip_encode`, prefill and decode by less than run-to-run noise
-(`clip_encode` spread ≤1.4%, ~11.0 s in every configuration). Defaults stay `auto`. They are
-exposed so that a workflow *can* pin a behaviour, not because they make it faster.
+**0.4.x 的调优开关不带来提速。** `load_mode`、`lazy_mode`、`flash_attn_type`、
+`vision_flash_attn` 对 `clip_encode`、prefill 和 decode 的影响都在运行间噪声之内（`clip_encode`
+波动 ≤1.4%，每种组合都是约 11.0 s）。默认值保持 `auto`。暴露它们是为了让工作流**能固定**某种
+行为，不是因为它们更快。
 
-**KV cache quantization works but is a net loss on small hybrid models.**
+**KV cache 量化有效，但在小型混合模型上是净亏。**
 
-| `type_k` / `type_v` | Decode | vs f16 baseline |
+| `type_k` / `type_v` | Decode | 相对 f16 |
 |---|---|---|
-| `auto` / `auto` (f16) | **85.59 t/s** | — |
-| `q8_0` / `auto` (K only) | 82.22 t/s | −3.9% |
+| `auto` / `auto`（f16） | **85.59 t/s** | — |
+| `q8_0` / `auto`（只量化 K） | 82.22 t/s | −3.9% |
 | `q8_0` / `q8_0` | 79.22 t/s | −7.4% |
 | `q4_0` / `q4_0` | 78.70 t/s | −8.0% |
 
-Quantizing K only costs almost exactly half of quantizing K+V, which is the expected
-dose-response if the decode loop dequantizes the whole history on every token — so the setting
-really does reach llama.cpp. It still loses here because this model keeps KV in only 8 of its
-32 layers (the rest are recurrent), so the f16 KV cache is just ~256 MiB; saving 114 MiB is
-invisible on a 12 GB card while costing 7% of decode speed. **Keep `auto`** unless you run a
-large dense VLM or a very long context, where the cache reaches gigabytes.
+只量化 K 的代价几乎正好是量化 K+V 的一半 —— 如果 decode 循环每个 token 都要反量化整段历史，
+这就是应有的剂量关系，说明设置确实传到了 llama.cpp。它在这里仍然亏，是因为该模型的 32 层里只有
+8 层带 KV（其余是循环层），f16 的 KV cache 总共才约 256 MiB；省 114 MiB 在 12 GB 卡上看不出来，
+却要付出 7% 的 decode 速度。**保持 `auto`**，除非你跑大尺寸稠密 VLM 或极长上下文——那种情况下
+cache 能到 GB 级。
 
-Two related facts that surprise people:
+两个容易误解的点：
 
-- The `SYCL0 compute buffer size` line in the log is the **graph compute scratch buffer**, not
-  the KV cache. KV has its own allocation and is only reported by
-  `llama_kv_cache: size = ... (type): ... MiB`, which requires `verbose=true`. A KV setting
-  will never shrink the compute-buffer number.
-- The type's block size must divide the head dimension (32 divides Qwen3.5's 256). Unsupported
-  combinations are reported by llama.cpp itself, not by the plugin.
+- 日志里的 `SYCL0 compute buffer size` 是**计算图的临时缓冲**，不是 KV cache。KV 有独立分配，
+  只有 `verbose=true` 时的 `llama_kv_cache: size = ... (type): ... MiB` 才会报告它。改 KV 类型
+  永远不会让 compute buffer 那个数字变小。
+- 类型的 block size 必须能整除 head 维度（32 能整除 Qwen3.5 的 256）。不支持的组合由 llama.cpp
+  自己报错，不归插件管。
 
-**Retuned defaults** (2.3.0) apply to freshly created nodes only; existing workflows keep their
-own saved values.
+**重调过的默认值**（2.3.0）只对新建节点生效，已有工作流保留自己存的值。
 
-| Node | Parameter | Old | New |
+| 节点 | 参数 | 旧 | 新 |
 |---|---|---|---|
 | Options | `n_ctx` | `2048` | `8192` |
 | Engine | `memory_cleanup` | `close` | `full_cleanup` |
@@ -441,55 +425,53 @@ own saved values.
 | Engine | `temperature` / `top_p` / `top_k` | `0.2` / `0.95` / `40` | `0.1` / `0.9` / `20` |
 | Engine | `think_display` | `show` | `hide` |
 
-Full history and the reasoning behind each change: [CHANGELOG.md](CHANGELOG.md).
+每一项的完整来龙去脉见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
-## Troubleshooting
+## 故障排查
 
-| Symptom | Cause | Fix |
+| 现象 | 原因 | 处理 |
 |---|---|---|
-| `failed to create memory slot for batch` / crash on the first decode token of a large image | `n_ctx` too small for the vision prefill (4000+ tokens) plus the first decode slot | raise `n_ctx` to `8192` or more |
-| Access violation on a large image with a hybrid model (Qwen3.5) | `ctx_checkpoints = 0` takes a buggy fast-path in llama-cpp-python | set `ctx_checkpoints = -1` |
-| `use_mmap` / `use_mlock` / `use_direct_io` appear to do nothing | removed from the 0.4.x load path | use `load_mode` instead |
-| `RESPONSE` is a truncated chunk of reasoning with no answer | the whole `max_tokens` budget was spent inside `<think>`, so `</think>` was never emitted and `hide` had nothing to strip | raise `max_tokens`, and set `reasoning_budget` well below it |
-| Every `.txt` contains `Error generating response: ...` | the engine returned its error string as text and the saver wrote it | `skip_on_error` (on by default) |
-| `control-looking token: <id> '</s>' was not control-type; this is probably a bug in the model` | the GGUF's `token_type` metadata marks `</s>` as a normal token. llama.cpp overrides the type and registers it as EOS | harmless, and it prints once per model load — which is why a 3-image batch with `full_cleanup` prints it 3 times. A GGUF re-converted with the official converter usually silences it |
-| `V cache quantization requires flash_attn` | quantized `type_v` combined with `flash_attn_type=disabled` | enable Flash Attention, or leave `type_v` at `auto` |
-| No models in the dropdown | folder not scanned, or everything matched `exclude_patterns` | see [Model discovery](#model-discovery); check the `verbose` output for the scanned roots |
-| Vision output is garbage after upgrading | new wheel installed over the old one, stale DLLs in `lib/` | uninstall first, then install — see [Installation](#installation) |
+| 大图第一次 decode 就报 `failed to create memory slot for batch` / 崩溃 | `n_ctx` 装不下视觉 prefill（4000+ token）加第一个 decode 槽 | 把 `n_ctx` 提到 `8192` 或更高 |
+| 混合模型（Qwen3.5）大图访问违规崩溃 | `ctx_checkpoints = 0` 会走 llama-cpp-python 里一条有 bug 的快路径 | 改回 `-1` |
+| 改 `use_mmap` / `use_mlock` / `use_direct_io` 毫无反应 | 0.4.x 的加载路径里没有它们了 | 改用 `load_mode` |
+| `RESPONSE` 是一段被截断的思考，没有答案 | `max_tokens` 全花在 `<think>` 里，`</think>` 从未生成，`hide` 无从剥离 | 提高 `max_tokens`，并把 `reasoning_budget` 设得明显更小 |
+| 每个 `.txt` 里都是 `Error generating response: ...` | 引擎把报错串当正文返回，保存节点照写了 | 打开 `skip_on_error`（默认已开） |
+| 加载时出现 `control-looking token: <id> '</s>' was not control-type; this is probably a bug in the model` | GGUF 的 `token_type` 元数据把 `</s>` 标成了普通 token，llama.cpp 覆盖类型并把它登记为 EOS | 无害。每次加载模型打印一次 —— 所以 3 张图配 `full_cleanup` 会打 3 次。换成官方转换脚本产出的 GGUF 通常就静默了 |
+| `V cache quantization requires flash_attn` | 量化了 `type_v` 又同时 `flash_attn_type=disabled` | 开 Flash Attention，或把 `type_v` 留 `auto` |
+| 下拉框里一个模型都没有 | 目录没被扫到，或全被 `exclude_patterns` 过滤了 | 见[模型目录](#模型目录)；用 `verbose` 看实际扫描了哪些根目录 |
+| 升级后视觉输出全是乱码 | 新 wheel 覆盖装到旧版之上，`lib/` 里残留旧 DLL | 先卸载再装，见[安装](#安装) |
 
 ---
 
-## What this fork changes
+## 本分支相对上游改了什么
 
-| Area | Upstream | This fork |
+| 方面 | 上游 | 本分支 |
 |---|---|---|
-| llama-cpp-python | 0.3.2x-era vision handlers | **0.3.39+ MTMD**: `GenericMTMDChatHandler`, `mmproj_path` passed straight to `Llama()` |
-| Parameter passing | fixed kwarg list | whitelist derived from the installed `Llama()` signature — 0.3.x and 0.4.x share one code path |
-| 0.4.x knobs | not exposed | `load_mode`, `lazy_mode`, `flash_attn_type`, `vision_flash_attn`, `type_k` / `type_v` |
-| Reasoning output | passed through verbatim | `think_display` (`hide` / `show`), robust against malformed tags, plus `reasoning_budget` on 0.4.x |
-| Defaults | `n_ctx 2048`, `memory_cleanup close`, `max_tokens 512` | retuned on B580: `8192` / `full_cleanup` / `2048` |
-| Vision token bounds | inconsistent bounds abort the run | invalid bound dropped with a warning |
-| Model folders | `model_folders` | plus `exclude_patterns` |
-| Measuring a run | `verbose` only | per-image timing line, independent of `verbose` |
-| Batch captioning | — | `LlamaCPP/Dataset`: folder loader + caption saver |
+| llama-cpp-python | 0.3.2x 时代的视觉 handler | **0.3.39+ MTMD**：`GenericMTMDChatHandler`，`mmproj_path` 直接传给 `Llama()` |
+| 参数传递 | 固定 kwarg 列表 | 按已安装的 `Llama()` 签名做白名单，0.3.x 与 0.4.x 共用一条代码路径 |
+| 0.4.x 开关 | 未暴露 | `load_mode`、`lazy_mode`、`flash_attn_type`、`vision_flash_attn`、`type_k` / `type_v` |
+| 思考输出 | 原样返回 | `think_display`（`hide` / `show`），能处理畸形标签；0.4.x 上另有 `reasoning_budget` |
+| 默认值 | `n_ctx 2048`、`memory_cleanup close`、`max_tokens 512` | 在 B580 上重调为 `8192` / `full_cleanup` / `2048` |
+| 视觉 token 边界 | 参数矛盾直接中断整批 | 丢弃非法边界并告警 |
+| 模型目录 | 仅 `model_folders` | 增加 `exclude_patterns` |
+| 测速 | 只能靠 `verbose` | 单图计时行，与 `verbose` 无关 |
+| 批量打标 | 无 | `LlamaCPP/Dataset`：目录加载器 + 标注保存器 |
 
-Feelers, bug reports and PRs that make the SYCL path better are welcome. This is a fork of
-[sebagallo/comfyui-sg-llama-cpp](https://github.com/sebagallo/comfyui-sg-llama-cpp); upstream
-fixes are tracked and merged where they apply.
+这个插件 fork 自 [sebagallo/comfyui-sg-llama-cpp](https://github.com/sebagallo/comfyui-sg-llama-cpp)，
+上游适用的修复会持续跟进合并。欢迎反馈 issue 和改进 SYCL 路径的 PR。
 
 ---
 
-## License and links
+## 许可与链接
 
-Licensed under the **GNU AGPLv3** — see [LICENSE](LICENSE). Being a fork of an AGPLv3 project,
-this fork stays AGPLv3.
+采用 **GNU AGPLv3**，见 [LICENSE](LICENSE)。作为 AGPLv3 项目的 fork，本分支同样保持 AGPLv3。
 
 | | |
 |---|---|
-| This fork (SYCL tuned) | https://github.com/allanmeng/comfyui-sg-llama-cpp |
-| SYCL wheels for Windows | https://github.com/allanmeng/llama-cpp-python-sycl-windows |
-| Other wheels (CUDA / CPU) | https://github.com/JamePeng/llama-cpp-python/releases |
-| Upstream plugin | https://github.com/sebagallo/comfyui-sg-llama-cpp |
-| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+| 本分支（SYCL 优化） | https://github.com/allanmeng/comfyui-sg-llama-cpp |
+| Windows SYCL wheel | https://github.com/allanmeng/llama-cpp-python-sycl-windows |
+| 其他 wheel（CUDA / CPU） | https://github.com/JamePeng/llama-cpp-python/releases |
+| 上游插件 | https://github.com/sebagallo/comfyui-sg-llama-cpp |
+| 变更记录 | [CHANGELOG.md](CHANGELOG.md) |

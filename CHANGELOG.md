@@ -42,6 +42,20 @@ model list filtering).
   (which floods the console) and only yielded a single `Prompt executed in X seconds` for the
   whole run, because ComfyUI has no per-node timing log.
 
+### Changed
+- **Both READMEs rewritten, and Chinese is now the landing page.** The old text was still
+  upstream's layout with fork sections bolted on: "What's New" stopped at 2.3.0 (no dataset
+  nodes, no `reasoning_budget`), the upgrade procedure pinned a 0.3.41 wheel, and the node
+  reference was a flat bullet dump mixing deprecated and current inputs. The new order is
+  what the pack does → requirements → install → quick start → node reference grouped by
+  concern → model discovery → batch captioning practice → B580 measurements →
+  troubleshooting → changes vs upstream. Every default was re-read from `define_schema()`.
+  - `README.md` is now **Chinese** (it is what GitHub renders on the repository landing
+    page); the English text moved to `README_EN.md` and `README_CN.md` was removed. Both
+    files carry the same two-link language switch at the top and share an identical
+    11-section skeleton.
+  - `CHANGELOG.md` stays English-only.
+
 ## [2.3.0] — 2026-10-17
 
 ### Fixed
