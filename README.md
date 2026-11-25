@@ -171,6 +171,73 @@ Utility to manually free resources.
 **Outputs**
 - `PASSTHROUGH`: The input passed through unmodified.
 
+## Batch Captioning (LoRA dataset tagging)
+
+Two optional utility nodes turn the plugin into a batch captioning pipeline (the common
+LoRA dataset workflow: describe a folder of images, one `.txt` per image). They live under
+`LlamaCPP/Dataset` and never touch the inference path — ignore them if you only generate
+single-image prompts.
+
+```
+Llama CPP Image Folder Loader ── images ──┐
+                              └─ paths  ──┤
+                                          └─► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
+                                                   (runs once per image,          (writes one .txt per image,
+                                                    one caption each)             next to the source image)
+```
+
+No third-party nodes are required, and images are never re-encoded or renamed.
+
+### LlamaCPPImageFolderLoader
+
+Scans a folder and emits a **list**, so a non-list node downstream (the Engine) runs once
+per image. Emitting a tensor batch instead would put every image into a single request and
+run out of context on the first try.
+
+**Inputs**
+- **Required**:
+  - `folder_path`: Absolute path is used as-is; a relative path resolves under `ComfyUI/input`.
+  - `extensions`: Comma separated, default `png,jpg,jpeg,webp,bmp`.
+  - `recursive`: Scan sub-folders (default `true`).
+  - `sort_order`: `natural` (2.png before 10.png) / `name` / `modified` / `none`.
+  - `max_images`: `0` = all. Use a small value to validate a workflow first.
+  - `start_index`: Skip the first N images after sorting, to resume an interrupted run.
+  - `max_side`: Downscale so the longest side is at most this many pixels (`0` = keep
+    original). This is the cheapest way to cut vision tokens and base64 size; `1024` is a
+    good captioning default.
+
+**Outputs**
+- `images` (list): One `[1, H, W, C]` tensor per file.
+- `paths` (list): Absolute file paths, parallel to `images`.
+- `count`: Number of loaded images.
+
+Images are EXIF-rotated to upright, and transparent pixels are composited on white instead
+of black. Unreadable files are skipped with a warning instead of aborting the run.
+
+### LlamaCPPCaptionSaver
+
+Writes one `.txt` per caption. By default the file lands **next to the source image with the
+same stem** (`abc.png` → `abc.txt`), which is exactly what kohya-style trainers expect.
+
+**Inputs**
+- **Required**:
+  - `text`: Caption(s) from `LlamaCPPEngine.RESPONSE`.
+  - `output_dir`: Empty = write next to each source image. Relative paths resolve under
+    `ComfyUI/input`.
+  - `skip_on_error`: Drop captions that are the Engine's error string
+    (`Error generating response: ...`). Default `true` — otherwise a failed image silently
+    becomes a garbage caption.
+  - `skip_empty`: Drop blank captions (default `true`).
+- **Optional**:
+  - `paths`: `paths` output of the loader. Leave unconnected to write numbered files
+    (`caption_00000.txt`, ...) into `output_dir` instead.
+
+**Outputs**
+- `saved` / `skipped`: Counters for verification.
+
+Files are written as UTF-8 with `\n` line endings, and every write is echoed to the console
+(`[llama_cpp dataset] caption saved: ...`) so a batch run can be audited afterwards.
+
 ## Model Directory Rules
 
 The plugin scans the following directories for `.gguf` files **recursively** (including subdirectories):
@@ -208,6 +275,10 @@ Create `config.json` in the plugin directory for additional search paths:
   "model_folders": [
     "D:\\AI\\LLM\\models",
     "/home/user/models"
+  ],
+  "exclude_patterns": [
+    "wan22",
+    "krea2"
   ]
 }
 ```
@@ -216,6 +287,7 @@ Create `config.json` in the plugin directory for additional search paths:
 - Paths can be absolute or relative
 - Both Windows and Unix style paths are supported
 - Non-existent paths are automatically filtered out
+- `exclude_patterns` is **optional**: case-insensitive substrings matched against the model's path relative to its search folder. Any GGUF whose path contains one of them is hidden from **both** dropdowns (models and mmproj). Useful when a folder is shared with a diffusion / video GGUF loader — llama.cpp cannot run those files, so they only clutter the list.
 - See `config.example.json` for additional examples
 
 ## Requirements

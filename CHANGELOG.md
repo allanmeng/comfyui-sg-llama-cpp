@@ -2,6 +2,42 @@
 
 All notable changes to this fork are documented here.
 
+## [Unreleased]
+
+### Added
+- **`LlamaCPPImageFolderLoader` / `LlamaCPPCaptionSaver` (`LlamaCPP/Dataset`).**
+  Batch captioning is the plugin's second use case (LoRA dataset tagging), but every
+  existing combination of third-party nodes broke at least one step: folder loaders that
+  emit a *tensor batch* instead of a list (so all N images land in one request and blow past
+  `n_ctx`), savers whose filenames do not match the source image, savers that mangle Windows
+  absolute paths (`F:\...` → `F_\...`) and therefore drop captions into a mirrored junk
+  directory, and savers that write the Engine's `Error generating response: ...` string
+  straight into the dataset. These two nodes own that pipeline end to end (~330 lines, no
+  new dependencies) and leave the inference path untouched.
+  - The loader emits `[1, H, W, C]` items, is `not_idempotent` (a cached file list would go
+    stale as soon as images are added), sorts naturally by default, and can downscale by
+    `max_side` — the cheapest lever on vision token count.
+  - The saver is `is_input_list=True`, writes UTF-8 with `\n`, never re-encodes or renames
+    images, skips `Error generating response: ...` and empty captions by default, and echoes
+    every path it writes.
+- **`reasoning_budget` on `LlamaCPPEngine`** (llama-cpp-python 0.4.3+). Sampler-level cap on
+  the thinking block: `-1` keeps the old behaviour, `0` ends the block immediately, `N` caps
+  the first reasoning block at N tokens. Without a cap the model can spend the whole
+  `max_tokens` on reasoning and never emit a closing `</think>`, which leaves
+  `think_display=hide` with nothing to strip and returns a truncated reasoning fragment.
+  The plugin also forwards `reasoning_start_in_prompt=True`, because Qwen3.x templates
+  prefill the opening think marker into the prompt — without it the sampler's 32-token
+  safety window makes the budget a silent no-op.
+- **`exclude_patterns` in `config.json`.** Case-insensitive substring match against the
+  scanned relative path; matches are hidden from **both** the model and mmproj dropdowns.
+  Needed as soon as `model_folders` points at a shared directory that also holds diffusion
+  or video GGUFs. Default is an empty list, so existing installs are unaffected.
+- **Per-image timing line.** `[llama_cpp] image timing | load ... | generate ... | total ...
+  | prompt N tok, out M tok (R tok/s)` is printed once per generation and is **independent of
+  `verbose`**. Previously a batch run was only measurable with the native `verbose` flag on
+  (which floods the console) and only yielded a single `Prompt executed in X seconds` for the
+  whole run, because ComfyUI has no per-node timing log.
+
 ## [2.3.0] — 2026-10-17
 
 ### Fixed

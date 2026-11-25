@@ -168,6 +168,67 @@ pip install llama_cpp_python-0.3.41-<你的构建>.whl
 **输出**
 - `PASSTHROUGH`：原样透传的输入。
 
+## 批量打标（LoRA 数据集）
+
+两个可选工具节点把插件扩展成一条批量打标流水线（LoRA 数据集最常见的用法：一组图各生成一份 `.txt`）。
+它们在菜单里的位置是 `LlamaCPP/Dataset`，**不参与推理路径** —— 只做单图提示词反推的话完全可以不装。
+
+```
+Llama CPP Image Folder Loader ── images ──┐
+                              └─ paths  ──┤
+                                          └─► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
+                                                   （每张图执行一次，             （每张图写一份 .txt，
+                                                     各产出一条回复）              默认写在原图旁边）
+```
+
+不依赖任何第三方节点，图片不会被重新编码、也不会被改名。
+
+### LlamaCPPImageFolderLoader
+
+扫描一个目录并输出**列表**，这样下游的非列表节点（Engine）会对每张图各执行一次。
+如果输出的是张量批，N 张图会被塞进同一条请求，第一次就会因上下文不足而失败。
+
+**输入**
+- **必填**：
+  - `folder_path`：绝对路径按原样使用；相对路径会解析到 `ComfyUI/input` 下。
+  - `extensions`：逗号分隔，默认 `png,jpg,jpeg,webp,bmp`。
+  - `recursive`：是否扫描子目录，默认 `true`。
+  - `sort_order`：`natural`（2.png 排在 10.png 前）/ `name` / `modified` / `none`。
+  - `max_images`：`0` = 全部。正式跑之前建议先设小值验证工作流。
+  - `start_index`：排序后跳过前 N 张，用于中断后续跑。
+  - `max_side`：长边上限，超过则等比缩小（`0` = 保持原尺寸）。这是降低视觉 token 数和
+    base64 体积最省事的手段，打标场景 `1024` 是个好默认值。
+
+**输出**
+- `images`（列表）：每个文件一个 `[1, H, W, C]` 张量。
+- `paths`（列表）：绝对路径，与 `images` 一一对应。
+- `count`：加载数量。
+
+图片会自动按 EXIF 转正；带透明通道的图会合成到白色背景（而不是变成黑色）。无法解码的
+文件会跳过并打印警告，不会中断整批。
+
+### LlamaCPPCaptionSaver
+
+每份 caption 写一个 `.txt`。默认写在**原图同目录、同文件名**（`abc.png` → `abc.txt`），
+这正是 kohya 系训练器期望的配对方式。
+
+**输入**
+- **必填**：
+  - `text`：来自 `LlamaCPPEngine.RESPONSE` 的 caption。
+  - `output_dir`：留空 = 写在每张原图旁边。相对路径会解析到 `ComfyUI/input` 下。
+  - `skip_on_error`：跳过 Engine 的报错字符串（`Error generating response: ...`）。
+    默认 `true` —— 否则某张图失败时，错误信息会被当成 caption 写进数据集。
+  - `skip_empty`：跳过空 caption（默认 `true`）。
+- **可选**：
+  - `paths`：加载器的 `paths` 输出。不接则改为在 `output_dir` 里写编号文件
+    （`caption_00000.txt` …）。
+
+**输出**
+- `saved` / `skipped`：写入与跳过的数量，用于核对。
+
+文件以 UTF-8、`\n` 换行写入，每次写入都会在控制台回显
+（`[llama_cpp dataset] caption saved: ...`），便于批量跑完之后审计。
+
 ## 模型目录规则
 
 插件会**递归扫描**以下目录中的 `.gguf` 文件（包括子目录）：
@@ -205,6 +266,10 @@ ComfyUI/models/LLM/
   "model_folders": [
     "D:\\AI\\LLM\\models",
     "/home/user/models"
+  ],
+  "exclude_patterns": [
+    "wan22",
+    "krea2"
   ]
 }
 ```
@@ -213,6 +278,7 @@ ComfyUI/models/LLM/
 - 路径可以是绝对路径或相对路径
 - 同时支持 Windows 和 Unix 风格路径
 - 不存在的路径会自动过滤
+- `exclude_patterns` 是**可选的**：不区分大小写的子串，与模型相对搜索目录的路径匹配。路径中包含其中任一的 GGUF 会从**两个**下拉菜单（模型与 mmproj）中隐藏。适用于某个目录同时被 diffusion / 视频 GGUF 加载器共用的场景——llama.cpp 无法运行那些文件，它们只会干扰列表。
 - 参见 `config.example.json` 获取更多示例
 
 ## 依赖要求
