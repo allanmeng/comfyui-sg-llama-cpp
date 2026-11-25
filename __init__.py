@@ -1,4 +1,5 @@
 from .nodes import LlamaCPPModelLoader, LlamaCPPOptions, LlamaCPPEngine, LlamaCPPMemoryCleanup
+from .dataset_nodes import LlamaCPPImageFolderLoader, LlamaCPPCaptionSaver
 from comfy_api.latest import ComfyExtension, io
 
 class SGLlamaExtension(ComfyExtension):
@@ -9,6 +10,8 @@ class SGLlamaExtension(ComfyExtension):
             LlamaCPPOptions,
             LlamaCPPEngine,
             LlamaCPPMemoryCleanup,
+            LlamaCPPImageFolderLoader,
+            LlamaCPPCaptionSaver,
         ]
 
 async def comfy_entrypoint() -> SGLlamaExtension:
