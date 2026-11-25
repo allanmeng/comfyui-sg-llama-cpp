@@ -5,6 +5,7 @@ import torch
 import sys
 import json
 import re
+import time
 from llama_cpp import Llama, llama_backend_free
 from llama_cpp.llama_chat_format import LlamaChatCompletionHandlerRegistry
 try:
@@ -36,6 +37,18 @@ from .utils import image_to_data_uri
 _LLAMA_INIT_PARAMS = set(inspect.signature(Llama.__init__).parameters.keys())
 _SUPPORTS_LOAD_MODE = "load_mode" in _LLAMA_INIT_PARAMS
 _LEGACY_LOAD_KEYS = frozenset({"use_mmap", "use_mlock", "use_direct_io"})
+
+# 0.4.x adds a reasoning-budget sampler to create_chat_completion(). Probe the
+# bound method instead of the version string: on 0.3.x these kwargs do not exist
+# and passing them would raise TypeError.
+_CHAT_COMPLETION_PARAMS = set(
+    inspect.signature(Llama.create_chat_completion).parameters.keys()
+)
+_SUPPORTS_REASONING_BUDGET = "reasoning_budget" in _CHAT_COMPLETION_PARAMS
+# Qwen3.x chat templates prefill the opening think tag into the prompt, so
+# the sampler never sees it in the *generated* text. Without this flag the budget
+# counter never starts and the feature silently no-ops.
+_SUPPORTS_REASONING_START_IN_PROMPT = "reasoning_start_in_prompt" in _CHAT_COMPLETION_PARAMS
 
 # Combo label -> llama.cpp enum value. These mirror llama_cpp.llama_cpp's
 # llama_load_mode / llama_lazy_mode / llama_flash_attn_type public enums.
@@ -83,6 +96,18 @@ def get_user_model_folders() -> List[str]:
     config = load_config()
     return config.get('model_folders', [])
 
+def get_exclude_patterns() -> List[str]:
+    """Get case-insensitive substrings from config; matching GGUF paths are hidden.
+
+    Model folders are often shared with other ComfyUI loaders (diffusion GGUF,
+    text encoders, video models). Those files are valid GGUF but useless here -
+    llama.cpp either cannot load them or they are not chat models - so let the
+    user filter them out instead of scrolling past them in the dropdowns.
+    """
+    config = load_config()
+    patterns = config.get('exclude_patterns', [])
+    return [p.lower() for p in patterns if isinstance(p, str) and p.strip()]
+
 def get_merged_model_folders() -> List[str]:
     """Merge ComfyUI text_encoders folders, auto-detected LLM folder, and user folders."""
     try:
@@ -106,6 +131,7 @@ def get_merged_model_folders() -> List[str]:
 def scan_gguf_models_in_folders() -> List[str]:
     """Scan merged folders recursively for GGUF model files. Returns relative paths (e.g. 'GGUF/model.gguf')."""
     folders = get_merged_model_folders()
+    exclude = get_exclude_patterns()
     model_list = []
     seen = set()
     for folder in folders:
@@ -118,6 +144,8 @@ def scan_gguf_models_in_folders() -> List[str]:
                     if f.lower().endswith('.gguf'):
                         # Build relative path from the base folder
                         rel_path = f if rel_dir == '.' else os.path.join(rel_dir, f)
+                        if exclude and any(p in rel_path.lower() for p in exclude):
+                            continue
                         if rel_path not in seen:
                             model_list.append(rel_path)
                             seen.add(rel_path)
@@ -380,6 +408,10 @@ class LlamaCPPEngine(io.ComfyNode):
                 io.Float.Input("frequency_penalty", default=0.0, min=0.0, max=5.0, step=0.01, tooltip="Frequency penalty", optional=True),
                 io.Int.Input("seed", default=1, min=-sys.maxsize, max=sys.maxsize, control_after_generate=True, tooltip="Random seed", optional=True),
                 io.Combo.Input("think_display", options=["show", "hide"], default="hide", tooltip="Control <think>...</think> reasoning output. 'show' keeps it in the response; 'hide' strips it so only the final answer is returned.", optional=True),
+                # Appended at the END on purpose: ComfyUI maps saved workflow widget
+                # values positionally, so inserting anywhere above would shift every
+                # widget after it.
+                io.Int.Input("reasoning_budget", default=-1, min=-1, max=32768, tooltip="[0.4.x] Cap the first <think> reasoning block at N tokens: -1 = unlimited (library default, same as before), 0 = force the block closed immediately (effectively no reasoning), N > 0 = at most N reasoning tokens before llama.cpp injects </think> and the model must answer. Use this when thinking eats the entire max_tokens budget and the answer arrives truncated. Set it well below max_tokens, otherwise the forced end may never be reached. No effect on 0.3.x.", optional=True),
             ],
             outputs=[
                 io.String.Output(display_name="RESPONSE")
@@ -387,8 +419,15 @@ class LlamaCPPEngine(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "full_cleanup", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 2048, temperature: float = 0.1, top_p: float = 0.9, top_k: int = 20, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = 1, think_display: str = "hide") -> io.NodeOutput:
+    def execute(cls, model: Dict[str, Any], prompt: str, images: torch.Tensor = None, options: Dict[str, Any] = None, system_prompt: str = "", memory_cleanup: str = "full_cleanup", response_format: Dict[str, Any] = {"type": "text"}, max_tokens: int = 2048, temperature: float = 0.1, top_p: float = 0.9, top_k: int = 20, min_p: float = 0.05, repeat_penalty: float = 1.1, present_penalty: float = 0.0, frequency_penalty: float = 0.0, seed: int = 1, think_display: str = "hide", reasoning_budget: int = -1) -> io.NodeOutput:
         global _global_llm
+        # Per-call wall clock. Deliberately independent of the native `verbose`
+        # flag: llama.cpp's own timings are only printed when verbose=on, which
+        # floods the console with per-tensor load lines. One summary line per
+        # generation keeps batch runs (N images = N executions) measurable.
+        _t_start = time.perf_counter()
+        _t_loaded = None
+        _t_gen = None
         try:
             # Validate inputs
             if not isinstance(model, dict) or "model_path" not in model:
@@ -570,6 +609,8 @@ class LlamaCPPEngine(io.ComfyNode):
                 _cleanup_global_llm(memory_cleanup)
                 _global_llm = Llama(**llama_kwargs)
 
+            _t_loaded = time.perf_counter()
+
             # Prepare response_format parameter
             response_format_param = None
             if isinstance(response_format, dict):
@@ -588,6 +629,31 @@ class LlamaCPPEngine(io.ComfyNode):
                 # Fallback for simple string if it happens
                 response_format_param = {"type": str(response_format)}
 
+            # 0.4.x reasoning-budget sampler. Only forwarded when the installed
+            # llama-cpp-python accepts it AND the user opted in (>= 0), so 0.3.x
+            # installs and default workflows keep the exact previous behaviour.
+            # Without a budget the model can spend all of max_tokens thinking and
+            # never emit a closing </think>, which leaves think_display='hide'
+            # with nothing to strip and returns a truncated reasoning fragment.
+            reasoning_kwargs = {}
+            if _SUPPORTS_REASONING_BUDGET and reasoning_budget is not None:
+                _budget = int(reasoning_budget)
+                if _budget >= 0:
+                    if _budget >= int(max_tokens):
+                        print(
+                            "[llama_cpp] WARNING: reasoning_budget (%d) >= max_tokens (%d). "
+                            "The forced </think> may never be reached, so the answer can "
+                            "still be truncated — set reasoning_budget well below max_tokens."
+                            % (_budget, int(max_tokens))
+                        )
+                    reasoning_kwargs["reasoning_budget"] = _budget
+                    if _SUPPORTS_REASONING_START_IN_PROMPT:
+                        # Qwen3.x templates prefill the think tag into the prompt, so the
+                        # sampler must count from the first generated token.
+                        reasoning_kwargs["reasoning_start_in_prompt"] = True
+                    if options.get("verbose"):
+                        print(f"[llama_cpp] reasoning budget active: {reasoning_kwargs}")
+
             # Generate response using global LLM
             response = _global_llm.create_chat_completion(
                 messages=messages,
@@ -601,13 +667,29 @@ class LlamaCPPEngine(io.ComfyNode):
                 min_p=min_p,
                 seed=seed,
                 response_format=response_format_param,
+                **reasoning_kwargs,
             )
+            _t_gen = time.perf_counter()
 
             # Extract the response text
             if not response or "choices" not in response or not response["choices"]:
                 raise RuntimeError("No response generated by the model")
 
             response_text = response["choices"][0]["message"]["content"]
+
+            # One summary line per image. Reported regardless of `verbose` so a
+            # batch run stays measurable without the native load spam.
+            _usage = (response or {}).get("usage") or {}
+            _ptok = int(_usage.get("prompt_tokens") or 0)
+            _ctok = int(_usage.get("completion_tokens") or 0)
+            _load_s = _t_loaded - _t_start
+            _gen_s = _t_gen - _t_loaded
+            _rate = f" ({_ctok / _gen_s:.1f} tok/s)" if _gen_s > 0 and _ctok else ""
+            print(
+                f"[llama_cpp] image timing | load {_load_s:.2f}s | "
+                f"generate {_gen_s:.2f}s | total {_load_s + _gen_s:.2f}s | "
+                f"prompt {_ptok} tok, out {_ctok} tok{_rate}"
+            )
 
             # Strip the whole <think> reasoning block (tags + content) when hiding,
             # keeping only the final answer. This is pure output post-processing:
@@ -646,6 +728,10 @@ class LlamaCPPEngine(io.ComfyNode):
                 )
             response_text = f"Error generating response: {_err}{_hint}"
             print(f"LlamaCPP Engine Error: {_err}{_hint}")
+            print(
+                f"[llama_cpp] image timing | FAILED after "
+                f"{time.perf_counter() - _t_start:.2f}s"
+            )
 
         return io.NodeOutput(response_text)
 

@@ -3,5 +3,9 @@
     "C:\\Users\\YourUsername\\models",
     "D:\\AI\\LLM\\models",
     "/home/user/models"
+  ],
+  "exclude_patterns": [
+    "diffusion",
+    "wan22"
   ]
 }
