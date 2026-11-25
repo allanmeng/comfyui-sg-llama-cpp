@@ -5,8 +5,6 @@
 Run GGUF language and vision models inside ComfyUI. Tuned for **Intel Arc / Iris Xe (SYCL)**,
 extended with a **batch captioning pipeline** for LoRA datasets.
 
-![Node preview](assets/node_preview.png)
-
 The pack does two jobs:
 
 | Job | Wiring | Use case |
@@ -14,7 +12,8 @@ The pack does two jobs:
 | Single-image inference | Model Loader → Options → Engine | describe an image, rewrite a prompt, ask a question about a picture |
 | Batch captioning | Image Folder Loader → Engine → Caption Saver | one `.txt` per image, for a LoRA dataset |
 
-Both share the same engine and the same GGUF. No third-party nodes are required for either.
+Both share the same engine and the same GGUF. No third-party nodes are required for either (the
+`Show Text` in the screenshots only displays the result — ComfyUI's own preview nodes work too).
 
 ---
 
@@ -95,25 +94,30 @@ Drop a `config.json` next to `__init__.py` to add model folders or hide noise �
 
 ## Quick start
 
+Both screenshots below are complete working graphs — copy the wiring as-is. They use different
+models, which is rather the point: swapping models means changing only the two dropdowns in the
+Model Loader.
+
 ### Describing a single image
 
-```
-Llama CPP Model Loader ── MODEL ────┐
-   model_name      = <your model>.gguf
-   mmproj_model_name = <your mmproj>.gguf   ← required for images
-                                     │
-Llama CPP Options ────── OPTIONS ────┤
-   n_ctx = 8192                      │
-                                     ▼
-                              Llama CPP Engine ── RESPONSE ──► (Show Text / preview)
-                                 images       = Load Image
-                                 prompt       = "Describe this image in detail."
-                                 system_prompt = ""
-```
+![Single-image prompt reversal workflow](assets/workflow_single_image.png)
 
-The checked-in `demo_workflow_llama-cpp-python_0.3.39+.json` is this graph. It uses
-`ShowText|pysssss` from [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts),
-so install that pack if you want to load the file as-is, and swap its `Load Image` source.
+Five nodes, four roles. `Load Image` supplies `IMAGE`, the Model Loader supplies `MODEL`, Options
+supplies `OPTIONS`, and all three converge on the Engine; the Engine's `RESPONSE` then feeds a
+display node. Drop any one of the three lines and nothing runs — in particular, with
+`mmproj_model_name` empty, `images` is silently ignored: the output looks fine while the model is
+answering without ever having seen the picture.
+
+The Engine's two text boxes do different jobs. `prompt` is the instruction for this run,
+`system_prompt` is the persona. The screenshot uses a Chinese instruction ("describe this image in
+detail in Chinese") plus a Chinese system prompt ("you must answer in Chinese") — the latter
+matters for 4B–8B models, which otherwise drift back to English mid-answer.
+
+`Show Text` on the right comes from
+[ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts)
+(`ShowText|pysssss`). Its only job here is rendering long text as readable lines; any node that
+accepts `STRING` is equivalent. The checked-in `demo_workflow_llama-cpp-python_0.3.39+.json` is
+this graph.
 
 **The four settings that actually matter**
 
@@ -129,15 +133,19 @@ from the `mmproj` file; the combo only matters for text-only models with an unus
 
 ### Batch captioning a folder
 
-```
-Llama CPP Image Folder Loader ── images ──┐
-   folder_path = path to images            │
-   max_side    = 1024                      ├──► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
-   max_images  = 0  (0 = all)              │       (runs once per image,            (writes one .txt per image,
-                              └─ paths  ───┘        one caption each)               next to the source image)
-```
+![Batch captioning workflow](assets/workflow_batch_caption.png)
 
-Run it once with `max_images = 3` before a full batch. Details and recommended settings:
+It differs from the graph above at both ends only: `Image Folder Loader` replaces `Load Image`, and
+`Caption Saver` replaces `Show Text`. The loader hands over the whole folder at once (`images` is a
+**list**, not a tensor batch), so ComfyUI expands the Engine N times — once per image — and the
+saver writes one `.txt` per execution.
+
+The third wire, `paths`, does exactly one job: pass each source path to the saver so the caption
+lands beside its image under a matching name (`abc.png` → `abc.txt`). Leave it unconnected and the
+run still works, but filenames degrade to `caption_00001.txt`.
+
+In the screenshot `max_images = 0` means no limit. Set it to `3` for one validation pass first.
+Details and recommended settings:
 [Batch captioning in practice](#batch-captioning-in-practice).
 
 ---

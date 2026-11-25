@@ -5,8 +5,6 @@
 在 ComfyUI 里跑 GGUF 语言模型与视觉模型。针对 **Intel Arc / Iris Xe（SYCL）** 调优，并内置一条
 **批量打标流水线**，直接产出 LoRA 数据集。
 
-![节点预览](assets/node_preview.png)
-
 这个插件干两件事：
 
 | 用途 | 接线 | 典型场景 |
@@ -14,7 +12,8 @@
 | 单图推理 | Model Loader → Options → Engine | 描述图片、改写提示词、就一张图提问 |
 | 批量打标 | Image Folder Loader → Engine → Caption Saver | 每张图一份 `.txt`，喂给 LoRA 训练 |
 
-两者共用同一个引擎、同一份 GGUF，**都不依赖任何第三方节点**。
+两者共用同一个引擎、同一份 GGUF，**都不依赖任何第三方节点**（截图里的 `Show Text` 只是用来
+显示结果，换成 ComfyUI 自带的预览节点也行）。
 
 ---
 
@@ -93,25 +92,26 @@ pip install llama_cpp_python-<版本>-<你的构建>.whl
 
 ## 快速上手
 
+下面两张截图是两条路径的完整接线，可以直接照着连。两张图用的模型不一样，正好说明换模型只需要改
+Model Loader 里那两个下拉框。
+
 ### 描述单张图片
 
-```
-Llama CPP Model Loader ── MODEL ────┐
-   model_name      = <你的模型>.gguf
-   mmproj_model_name = <你的 mmproj>.gguf   ← 要读图必须接
-                                     │
-Llama CPP Options ────── OPTIONS ────┤
-   n_ctx = 8192                      │
-                                     ▼
-                              Llama CPP Engine ── RESPONSE ──► (Show Text / 预览)
-                                 images       = Load Image
-                                 prompt       = "详细描述这张图片。"
-                                 system_prompt = ""
-```
+![单图提示词反推工作流](assets/workflow_single_image.png)
 
-仓库里的 `demo_workflow_llama-cpp-python_0.3.39+.json` 就是这张图。它用了
-[ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) 的
-`ShowText|pysssss`，想直接加载就一起装，并把里面的 `Load Image` 换成你自己的图。
+图里五个节点、四类角色：`Load Image` 出 `IMAGE`，Model Loader 出 `MODEL`，Options 出
+`OPTIONS`，三条线一起汇进 Engine，Engine 的 `RESPONSE` 再接一个显示节点。缺任何一条都跑不
+起来 —— 尤其 `mmproj_model_name` 空着的时候，`images` 会被静默忽略，输出看着正常，实际是在
+没看图的情况下作答。
+
+Engine 的两个文本框分工不同：`prompt` 是这次的指令，`system_prompt` 是角色设定。截图里写的是
+「用中文详细描述这张图片的内容」和「你必须要用中文回答」—— 后者对 4B~8B 的模型很有用，不写
+它经常中英混杂。
+
+最右边那个 `Show Text` 来自
+[ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts)（`ShowText|pysssss`），
+用它的唯一理由是能把长文本渲染成可读的多行；换成任何接受 `STRING` 的节点都等价。仓库里的
+`demo_workflow_llama-cpp-python_0.3.39+.json` 就是这张接线。
 
 **真正影响结果的四个设置**
 
@@ -127,15 +127,16 @@ Llama CPP Options ────── OPTIONS ────┤
 
 ### 批量打标一个目录
 
-```
-Llama CPP Image Folder Loader ── images ──┐
-   folder_path = 图片目录                   │
-   max_side    = 1024                      ├──► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
-   max_images  = 0  (0 = 全部)             │       （每张图执行一次，            （每张图写一份 .txt，
-                              └─ paths  ───┘        各产出一条标注）              默认写在原图旁边）
-```
+![批量打标工作流](assets/workflow_batch_caption.png)
 
-正式跑之前先设 `max_images = 3` 验证一遍。推荐参数见
+和上图只差两端：`Image Folder Loader` 顶替 `Load Image`，`Caption Saver` 顶替 `Show Text`。
+Loader 一次交出整个目录（`images` 是**列表**，不是张量批），Engine 因此被展开执行 N 次、每次
+一张图，Saver 每执行一次写一份 `.txt`。
+
+第三条线 `paths` 只做一件事：把每张图的原路径传给 Saver，标注靠它才能落到图片同目录、同文件名
+（`abc.png` → `abc.txt`）。不接也能跑，但会退化成 `caption_00001.txt` 这样的序号命名。
+
+截图里的 `max_images = 0` 表示不做限制。正式跑之前先改成 `3` 验证一遍。其余推荐参数见
 [批量打标的实践细节](#批量打标的实践细节)。
 
 ---

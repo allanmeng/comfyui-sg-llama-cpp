@@ -55,6 +55,14 @@ model list filtering).
     files carry the same two-link language switch at the top and share an identical
     11-section skeleton.
   - `CHANGELOG.md` stays English-only.
+  - **Screenshots replaced.** The single `assets/node_preview.png` hero image is gone; the two
+    use cases now each carry a real graph screenshot inside the section that explains them
+    (`assets/workflow_single_image.png`, `assets/workflow_batch_caption.png`), with prose that
+    covers what the picture cannot: which three wires are mandatory, why an empty
+    `mmproj_model_name` fails silently, what the third `paths` wire is for, and what
+    `max_images = 0` means. The two ASCII wiring diagrams were dropped — the screenshots show
+    the same structure with the actual values in place. Images are palette-quantized
+    (100 KB / 524 KB) so the page still loads on a slow connection.
 
 ## [2.3.0] — 2026-10-17
 
