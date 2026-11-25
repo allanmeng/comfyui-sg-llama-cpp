@@ -2,7 +2,11 @@
 
 All notable changes to this fork are documented here.
 
-## [Unreleased]
+## [2.4.0] — 2026-11-25
+
+Batch captioning becomes a first-class use case: two new dataset nodes plus the
+engine-side controls that a real tagging run needs (reasoning budget, per-image timing,
+model list filtering).
 
 ### Added
 - **`LlamaCPPImageFolderLoader` / `LlamaCPPCaptionSaver` (`LlamaCPP/Dataset`).**
@@ -12,7 +16,7 @@ All notable changes to this fork are documented here.
   `n_ctx`), savers whose filenames do not match the source image, savers that mangle Windows
   absolute paths (`F:\...` → `F_\...`) and therefore drop captions into a mirrored junk
   directory, and savers that write the Engine's `Error generating response: ...` string
-  straight into the dataset. These two nodes own that pipeline end to end (~330 lines, no
+  straight into the dataset. These two nodes own that pipeline end to end (~377 lines, no
   new dependencies) and leave the inference path untouched.
   - The loader emits `[1, H, W, C]` items, is `not_idempotent` (a cached file list would go
     stale as soon as images are added), sorts naturally by default, and can downscale by

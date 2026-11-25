@@ -1,274 +1,321 @@
 [中文](README_CN.md) | English
 
-# comfyui-sg-llama-cpp (Intel GPU SYCL Accelerated)
+# comfyui-sg-llama-cpp
 
-ComfyUI custom node that acts as a llama-cpp-python wrapper, **specifically optimized for Intel GPU (Arc / Iris Xe) with SYCL backend acceleration**. Supports vision models and allows generating text responses from prompts using llama.cpp.
+Run GGUF language and vision models inside ComfyUI. Tuned for **Intel Arc / Iris Xe (SYCL)**,
+extended with a **batch captioning pipeline** for LoRA datasets.
 
-![Screenshot](assets/node_preview.png)
+![Node preview](assets/node_preview.png)
 
-- Load and use GGUF models (including vision models)
-- Generate text prompts using llama.cpp
-- Support for multi-modal inputs (multiple images/batches)
-- Advanced sampling (Min-P, Presence/Frequency penalties)
-- JSON Schema support for structured output (json_object)
-- Memory management options
-- Integration with ComfyUI workflows
-- **llama-cpp-python 0.3.39+ MTMD rewrite support** (GenericMTMDChatHandler)
-- **Hybrid model support** (Qwen3.5 etc. via `ctx_checkpoints`)
+The pack does two jobs:
+
+| Job | Wiring | Use case |
+|---|---|---|
+| Single-image inference | Model Loader → Options → Engine | describe an image, rewrite a prompt, ask a question about a picture |
+| Batch captioning | Image Folder Loader → Engine → Caption Saver | one `.txt` per image, for a LoRA dataset |
+
+Both share the same engine and the same GGUF. No third-party nodes are required for either.
+
+---
+
+## Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Node reference](#node-reference)
+- [Model discovery](#model-discovery)
+- [Batch captioning in practice](#batch-captioning-in-practice)
+- [Measured on Intel Arc B580](#measured-on-intel-arc-b580)
+- [Troubleshooting](#troubleshooting)
+- [What this fork changes](#what-this-fork-changes)
+- [License and links](#license-and-links)
+
+---
+
+## Requirements
+
+| Component | Requirement | Notes |
+|---|---|---|
+| ComfyUI | a build shipping `comfy_api.latest` | these nodes use the V3 schema API (`define_schema`), not the legacy `INPUT_TYPES` |
+| llama-cpp-python | **>= 0.3.39** | 0.3.39+ is required (MTMD rewrite); 0.4.x additionally unlocks `load_mode`, KV quantization and `reasoning_budget` |
+| GPU backend | SYCL wheel for Intel Arc | JamePeng's releases have **no** SYCL builds — see below |
+
+The plugin detects what the installed `llama-cpp-python` supports **from its function
+signatures, not from the version string**, and drops parameters the build does not know about.
+One install of this plugin serves 0.3.x and 0.4.x alike; unsupported widgets simply do nothing.
 
 ## Installation
 
-1. Install the SYCL-accelerated llama-cpp-python wheel.
+### 1. Install a wheel
 
-   > **Important**: JamePeng's releases do **not** include SYCL builds. For Intel GPU SYCL acceleration, download the whl from:
-   > ```
-   > https://github.com/allanmeng/llama-cpp-python-sycl-windows
-   > ```
-   > If you don't need SYCL (e.g., using CUDA/CPU), you can use the generic builds from https://github.com/JamePeng/llama-cpp-python/releases
+**Intel GPU (SYCL)** — prebuilt Windows wheels:
 
-2. Clone this repository into your ComfyUI custom nodes directory:
-   ```bash
-   cd ComfyUI/custom_nodes
-   git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
-   ```
-
-3. Restart ComfyUI.
-
-### Upgrading from 0.3.38 or Earlier
-
-If you are upgrading llama-cpp-python from version **0.3.38 or earlier** to **0.3.39+**, do NOT use `pip install --upgrade` — old files may linger and cause conflicts. Follow this procedure instead:
-
-```bat
-# 1. Completely remove the old version
-pip uninstall llama-cpp-python -y
-
-# 2. Install the new wheel
-pip install llama_cpp_python-0.3.41-<your-build>.whl
+```
+https://github.com/allanmeng/llama-cpp-python-sycl-windows
 ```
 
-> **Why uninstall first?** A simple `--upgrade` may leave stale DLLs from the old version in `lib/`, which can conflict with the new version's files. Uninstalling first ensures a clean state.
+**Other backends (CUDA / CPU / Vulkan):**
 
-## What's New (v2.3.0)
+```
+https://github.com/JamePeng/llama-cpp-python/releases
+```
 
-This fork adapts the plugin for **llama-cpp-python 0.3.39+** (MTMD rewrite) and ships additional fixes/tuning on top:
+### 2. Clone the node pack
 
-### v2.3.0 (2026-10-17)
-- **`use_mmap` / `use_mlock` / `use_direct_io` were dead switches on 0.4.x** — they now show as `[DEPRECATED in 0.4.x]`, still work on 0.3.x, and are skipped when the build supports `load_mode`.
-- **New 0.4.x knobs exposed**: `load_mode`, `lazy_mode`, `flash_attn_type`, `vision_flash_attn` (all default `auto`).
-- **KV cache quantization**: `type_k` / `type_v` (`--cache-type-k/-v`) can cut the KV cache allocation by ~45% (`q8_0`) or ~70% (`q4_0`). A quantized V cache requires Flash Attention — that invalid combination is rejected with a clear message. **Measured: a net loss on small hybrid models** (`q8_0` = −7.4% decode speed for ~114 MiB saved on Qwen3.5-4B), so the default stays `auto`; it pays off only for large dense VLMs or very long contexts.
-- **Parameter whitelist against the installed `Llama()` signature** — one code path for 0.3.x and 0.4.x, unknown params are dropped instead of leaking into `**kwargs`.
-- **Vision token bounds no longer abort the run** — an inconsistent `vision_image_max_tokens` is dropped with a warning instead of raising.
-- **New Options inputs are appended, never inserted mid-list** — ComfyUI stores widget values positionally, so mid-list insertions corrupted existing workflows.
-- Benchmarked on B580/0.4.3: the four new knobs gave **no measurable speed-up** (`clip_encode` spread ≤1.4%); defaults stay `auto`.
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
+```
 
-### v2.2.0 (2026-08-22)
-- **`checkpoint_interval` / `checkpoint_on_device` options** on `LlamaCPPOptions` for hybrid models (defaults `4096` / `Disabled`). Verified via 2×2 benchmark (host/device × 8/16 checkpoints): no impact on load, encode or token throughput — defaults are optimal for most users.
-- **`think_display` toggle on `LlamaCPPEngine`** — `show`/`hide` to keep or strip the `<think>…</think>` reasoning block. Handles malformed tags (missing opening, multiple closing, dangling open).
-- **`think` stripping robustness** — keeps only text after the *last* `</think>` (engines may emit `</think>…reasoning…<//think>answer` with no opening tag).
-- **`ctx_checkpoints` default changed `0` → `-1`** — `0` triggers a buggy fast-path in llama-cpp-python 0.3.48 that crashes on large images; `-1` uses the llama_cpp default (16) and avoids the crash.
-- **Large-image `n_ctx` exhaustion → reactive English hint** (no forced override): if the first decode fails with "memory slot for batch", the engine tells you to raise `n_ctx` (8192 known-good for large images).
+### 3. Restart ComfyUI
 
-### 0.3.39+ Adaptation
-- **`clip_model_path` deprecated** → replaced by `mmproj_path` passed directly to `Llama()`
-- **Manual handler creation removed** → `Llama()` now internally creates the vision handler via `chat_handler_kwargs`
-- **`GenericMTMDChatHandler`** replaces model-specific handlers as the primary vision handler
-- **Parameter filtering** inspects `GenericMTMDChatHandler` union `MTMDChatHandler` to filter valid kwargs
-- **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id` (not accepted by `GenericMTMDChatHandler`)
-- **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
+Both nodes appear under the `LlamaCPP` category (`LlamaCPP/Dataset` for the captioning pair).
 
-## Node Reference
+### Upgrading from llama-cpp-python 0.3.38 or earlier
 
-### LlamaCPPModelLoader
-Loads GGUF model files and prepares them for use.
+Do **not** use `pip install --upgrade`. Stale DLLs left in `lib/` collide with the new build:
 
-**Inputs**
-- **Required**:
-  - `model_name`: Select the GGUF model file to load.
-- **Optional**:
-  - `chat_format`: Chat template to use (default: `llama-2`). In 0.3.39+, vision models auto-detect via `GenericMTMDChatHandler`.
-  - `mmproj_model_name`: Multi-modal projector model for vision (default: `None`).
+```bat
+pip uninstall llama-cpp-python -y
+pip install llama_cpp_python-<version>-<your-build>.whl
+```
 
-**Outputs**
-- `MODEL`: The loaded Llama model object.
+> On Windows, the 0.3.39+ MTMD rewrite moved vision handling into `GenericMTMDChatHandler`
+> and replaced `clip_model_path` with `mmproj_path`. Installing a 0.3.39+ wheel over a 0.3.38
+> install without uninstalling first is the most common cause of "the node loads but vision
+> output is garbage".
 
-### LlamaCPPOptions
-Configures advanced parameters for the model.
+### 4. Optional configuration
 
-**Inputs**
-- **Optional**:
-  - `n_gpu_layers`: Number of layers to offload to GPU (default: `-1` for all).
-  - `n_ctx`: Context window size (default: `8192`; a large-image prefill needs 4000+ tokens of headroom).
-  - `n_threads`: CPU threads to use (default: `-1` for auto).
-  - `n_threads_batch`: Threads for batch processing (default: `-1` for auto).
-  - `n_batch`: Batch size (default: `2048`).
-  - `n_ubatch`: Micro-batch size (default: `512`).
-  - `main_gpu`: Main GPU ID (default: `0`).
-  - `offload_kqv`: Offload K/Q/V to GPU (default: `Enabled`).
-  - `numa`: NUMA support (default: `Disabled`).
-  - `use_mmap`: Memory mapping (default: `Enabled`). **DEPRECATED in llama-cpp-python 0.4.x** — ignored there, use `load_mode`; still honored by 0.3.x.
-  - `use_mlock`: Memory locking (default: `Disabled`). **DEPRECATED in 0.4.x** — use `load_mode=mlock`.
-  - `use_direct_io`: Enable direct I/O for library (Linux only, default: `Disabled`). **DEPRECATED in 0.4.x** — use `load_mode=direct_io`.
-  - `verbose`: Verbose logging (default: `Disabled`). When enabled, the resolved 0.4.x tuning parameters are echoed to the console.
-  - `ctx_checkpoints`: Context checkpoints (default: `-1` for default; `0` disables — **do not use `0` with llama-cpp-python 0.3.48, it triggers a buggy fast-path that crashes on large images**; required for hybrid models like Qwen3.5).
-  - `checkpoint_interval`: Hybrid checkpoint token interval (default: `4096`).
-  - `checkpoint_on_device`: Store hybrid checkpoint payloads in VRAM (default: `Disabled`; ~50 MiB per checkpoint, no throughput impact — benchmarks show defaults are optimal).
-  - `vision_use_gpu`: Enable GPU for vision handler (default: `Enabled`).
-  - `vision_image_min_tokens`: Minimum image tokens (default: `1024`, recommended for Qwen-VL; `-1` for default).
-  - `vision_image_max_tokens`: Maximum image tokens (default: `-1` for default). Must be `-1` or `>= vision_image_min_tokens`.
-  - `load_mode` (**0.4.x**): Model load strategy — `auto` / `none` / `mmap` / `mlock` / `mmap_mlock` / `direct_io` (default: `auto`).
-  - `lazy_mode` (**0.4.x**): Lazy tensor loading, requires mmap — `auto` / `off` / `on` (default: `auto`).
-  - `flash_attn_type` (**0.4.x**): Flash Attention for the main model — `auto` / `disabled` / `enabled` (default: `auto`).
-  - `vision_flash_attn` (**0.4.x**): Flash Attention inside the vision encoder — `auto` / `enabled` / `disabled` (default: `auto` = handler default).
-  - `type_k` (**0.4.x**): KV cache data type for K (`--cache-type-k`) — `auto` / `f16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl` / `bf16` (default: `auto` = f16). Quantizing shrinks the KV cache allocation (reported by `llama_kv_cache: size = ...`, **not** by the compute-buffer line). Measured on B580/Qwen3.5-4B: `q8_0` costs **−7.4%** decode speed for ~114 MiB saved, so it is only worth it for large dense VLMs or very long contexts.
-  - `type_v` (**0.4.x**): KV cache data type for V (`--cache-type-v`), same options. **A quantized V cache requires Flash Attention** — it is rejected when `flash_attn_type='disabled'`.
+Drop a `config.json` next to `__init__.py` to add model folders or hide noise — see
+[Model discovery](#model-discovery). The plugin works without it.
 
-> The four `0.4.x` knobs are appended at the end of the input list on purpose: ComfyUI
-> maps saved workflow widget values by position. On a 0.3.x build they are ignored
-> automatically (detected from the installed `Llama()` signature).
+---
 
-**Outputs**
-- `OPTIONS`: A configuration dictionary.
+## Quick start
 
-### LlamaCPPEngine
-The main generation node.
+### Describing a single image
 
-**Inputs**
-- **Required**:
-  - `model`: The model from `LlamaCPPModelLoader`.
-  - `prompt`: The text prompt.
-- **Optional**:
-  - `images`: Input image(s) for vision models (supports batches).
-  - `options`: Options from `LlamaCPPOptions`.
-  - `system_prompt`: System instruction (default: empty).
-  - `memory_cleanup`: Strategy to clean memory after generation (default: `full_cleanup`).
-  - `response_format`: `text` or `json_object` (default: `text`).
-  - `json_schema`: JSON Schema to enforce (available only when `json_object` is selected).
-  - `max_tokens`: Max new tokens (default: `2048`).
-  - `temperature`: Randomness (default: `0.1`).
-  - `top_p`: Nucleus sampling (default: `0.9`).
-  - `top_k`: Top-k sampling (default: `20`).
-  - `min_p`: Min-p sampling (default: `0.05`).
-  - `repeat_penalty`: Penalty for repetition (default: `1.1`).
-  - `present_penalty`: Penalty for presence of tokens (default: `0.0`).
-  - `frequency_penalty`: Penalty for frequency of tokens (default: `0.0`).
-  - `seed`: Random seed (default: `1`).
-  - `think_display`: `show` or `hide` (default: `hide`). `hide` strips the
-    `<think>…</think>` reasoning block so only the final answer is returned.
-    Handles malformed tags (missing opening, multiple closing, dangling open).
+```
+Llama CPP Model Loader ── MODEL ────┐
+   model_name      = <your model>.gguf
+   mmproj_model_name = <your mmproj>.gguf   ← required for images
+                                     │
+Llama CPP Options ────── OPTIONS ────┤
+   n_ctx = 8192                      │
+                                     ▼
+                              Llama CPP Engine ── RESPONSE ──► (Show Text / preview)
+                                 images       = Load Image
+                                 prompt       = "Describe this image in detail."
+                                 system_prompt = ""
+```
 
-**Outputs**
-- `RESPONSE`: The generated text.
+The checked-in `demo_workflow_llama-cpp-python_0.3.39+.json` is this graph. It uses
+`ShowText|pysssss` from [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts),
+so install that pack if you want to load the file as-is, and swap its `Load Image` source.
 
-### LlamaCPPMemoryCleanup
-Utility to manually free resources.
+**The four settings that actually matter**
 
-**Inputs**
-- **Required**:
-  - `memory_cleanup`: Cleanup mode (`close`, `backend_free`, `full_cleanup`, `persistent`).
-- **Optional**:
-  - `passthrough`: Any input to pass through (allows chaining).
+| Setting | Where | Why |
+|---|---|---|
+| `mmproj_model_name` | Model Loader | without it the model runs text-only and `images` is ignored |
+| `n_ctx = 8192` | Options | one large image is 4000+ vision tokens; the old `2048` default cannot hold it |
+| `max_tokens = 2048` | Engine | a detailed description is easily 500+ tokens, and reasoning models spend budget before the answer |
+| `think_display = hide` | Engine | strips the `<think>` block so `RESPONSE` is the answer, not the monologue |
 
-**Outputs**
-- `PASSTHROUGH`: The input passed through unmodified.
+Leave `chat_format` at its default. For vision models the handler is chosen automatically
+from the `mmproj` file; the combo only matters for text-only models with an unusual template.
 
-## Batch Captioning (LoRA dataset tagging)
-
-Two optional utility nodes turn the plugin into a batch captioning pipeline (the common
-LoRA dataset workflow: describe a folder of images, one `.txt` per image). They live under
-`LlamaCPP/Dataset` and never touch the inference path — ignore them if you only generate
-single-image prompts.
+### Batch captioning a folder
 
 ```
 Llama CPP Image Folder Loader ── images ──┐
-                              └─ paths  ──┤
-                                          └─► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
-                                                   (runs once per image,          (writes one .txt per image,
-                                                    one caption each)             next to the source image)
+   folder_path = path to images            │
+   max_side    = 1024                      ├──► Llama CPP Engine ── RESPONSE ──► Llama CPP Caption Saver
+   max_images  = 0  (0 = all)              │       (runs once per image,            (writes one .txt per image,
+                              └─ paths  ───┘        one caption each)               next to the source image)
 ```
 
-No third-party nodes are required, and images are never re-encoded or renamed.
+Run it once with `max_images = 3` before a full batch. Details and recommended settings:
+[Batch captioning in practice](#batch-captioning-in-practice).
 
-### LlamaCPPImageFolderLoader
+---
 
-Scans a folder and emits a **list**, so a non-list node downstream (the Engine) runs once
-per image. Emitting a tensor batch instead would put every image into a single request and
-run out of context on the first try.
+## Node reference
 
-**Inputs**
-- **Required**:
-  - `folder_path`: Absolute path is used as-is; a relative path resolves under `ComfyUI/input`.
-  - `extensions`: Comma separated, default `png,jpg,jpeg,webp,bmp`.
-  - `recursive`: Scan sub-folders (default `true`).
-  - `sort_order`: `natural` (2.png before 10.png) / `name` / `modified` / `none`.
-  - `max_images`: `0` = all. Use a small value to validate a workflow first.
-  - `start_index`: Skip the first N images after sorting, to resume an interrupted run.
-  - `max_side`: Downscale so the longest side is at most this many pixels (`0` = keep
-    original). This is the cheapest way to cut vision tokens and base64 size; `1024` is a
-    good captioning default.
+### Llama CPP Model Loader
 
-**Outputs**
-- `images` (list): One `[1, H, W, C]` tensor per file.
-- `paths` (list): Absolute file paths, parallel to `images`.
-- `count`: Number of loaded images.
+`LlamaCPP` · outputs `MODEL`
 
-Images are EXIF-rotated to upright, and transparent pixels are composited on white instead
-of black. Unreadable files are skipped with a warning instead of aborting the run.
+| Input | Req | Default | Notes |
+|---|:--:|---|---|
+| `model_name` | yes | — | every `.gguf` found by the [model scan](#model-discovery) except files with `mmproj` in the name |
+| `chat_format` | no | `llama-2` | only used for text-only models; vision models pick their handler from the mmproj |
+| `mmproj_model_name` | no | `None` | files with `mmproj` in the name. `None` = text-only |
 
-### LlamaCPPCaptionSaver
+### Llama CPP Options
 
-Writes one `.txt` per caption. By default the file lands **next to the source image with the
-same stem** (`abc.png` → `abc.txt`), which is exactly what kohya-style trainers expect.
+`LlamaCPP` · outputs `OPTIONS`
 
-**Inputs**
-- **Required**:
-  - `text`: Caption(s) from `LlamaCPPEngine.RESPONSE`.
-  - `output_dir`: Empty = write next to each source image. Relative paths resolve under
-    `ComfyUI/input`.
-  - `skip_on_error`: Drop captions that are the Engine's error string
-    (`Error generating response: ...`). Default `true` — otherwise a failed image silently
-    becomes a garbage caption.
-  - `skip_empty`: Drop blank captions (default `true`).
-- **Optional**:
-  - `paths`: `paths` output of the loader. Leave unconnected to write numbered files
-    (`caption_00000.txt`, ...) into `output_dir` instead.
+**Core**
 
-**Outputs**
-- `saved` / `skipped`: Counters for verification.
+| Input | Default | Notes |
+|---|---|---|
+| `n_gpu_layers` | `-1` | `-1` = offload everything |
+| `n_ctx` | `8192` | raise it for large images or long prompts. `8192` is the tested floor |
+| `n_threads` / `n_threads_batch` | `-1` | `-1` = auto |
+| `n_batch` / `n_ubatch` | `2048` / `512` | larger `n_batch` speeds up prefill at the cost of memory |
+| `main_gpu` | `0` | device index |
+| `offload_kqv` | on | keep K/Q/V on the GPU |
+| `numa` | off | NUMA affinity (multi-socket hosts) |
+| `verbose` | off | floods the console with per-tensor and per-token lines. When on, the resolved tuning parameters are echoed back |
 
-Files are written as UTF-8 with `\n` line endings, and every write is echoed to the console
-(`[llama_cpp dataset] caption saved: ...`) so a batch run can be audited afterwards.
+**Vision**
 
-## Model Directory Rules
+| Input | Default | Notes |
+|---|---|---|
+| `vision_use_gpu` | on | run the vision encoder on the GPU |
+| `vision_image_min_tokens` | `1024` | Qwen-VL's minimum. `-1` = handler default |
+| `vision_image_max_tokens` | `-1` | `-1` = handler default. Must be `-1` or `>= min_tokens`; an inconsistent value is dropped with a warning instead of aborting the run |
 
-The plugin scans the following directories for `.gguf` files **recursively** (including subdirectories):
+**Hybrid / recurrent models (Qwen3.5 and friends)**
 
-| Source | Path(s) | Auto-detected |
-|--------|---------|:---:|
-| ComfyUI `text_encoders` | `ComfyUI/models/text_encoders/` + `ComfyUI/models/clip/` | Yes |
-| Dedicated LLM folder | `ComfyUI/models/LLM/` | Yes |
-| Custom folders | Any path in `config.json` | No |
+| Input | Default | Notes |
+|---|---|---|
+| `ctx_checkpoints` | `-1` | `-1` = llama-cpp-python default (16). **Do not use `0`** — it hits a buggy fast-path that crashes on large images |
+| `checkpoint_interval` | `4096` | checkpoint token interval |
+| `checkpoint_on_device` | off | keeps checkpoint payloads in VRAM (~50 MiB each). Benchmarked: no throughput change, so off is fine |
 
-All scanned files are automatically separated into two dropdowns by filename:
-- **Model dropdown**: `.gguf` files (excluding those with `mmproj` in the name)
-- **mmproj dropdown**: `.gguf` files with `mmproj` in the filename
+**Load strategy** (`llama-cpp-python` 0.4.x only; ignored by 0.3.x)
 
-### Recommended Layout
+| Input | Default | Notes |
+|---|---|---|
+| `use_mmap` / `use_mlock` / `use_direct_io` | on / off / off | **[DEPRECATED in 0.4.x]** removed from the 0.4.x load path. Still honored by 0.3.x. On 0.4.x use `load_mode` |
+| `load_mode` | `auto` | `auto` / `none` / `mmap` / `mlock` / `mmap_mlock` / `direct_io` |
+| `lazy_mode` | `auto` | `auto` / `off` / `on`. Requires mmap |
+| `flash_attn_type` | `auto` | Flash Attention for the main model: `auto` / `disabled` / `enabled` |
+| `vision_flash_attn` | `auto` | Flash Attention inside the vision encoder: `auto` / `enabled` / `disabled` |
+| `type_k` / `type_v` | `auto` | KV cache data type: `auto` / `f16` / `bf16` / `q8_0` / `q5_1` / `q5_0` / `q4_1` / `q4_0` / `iq4_nl`. `auto` = f16. **A quantized `type_v` requires Flash Attention** — the combination with `flash_attn_type=disabled` is rejected up front. See [the measurement](#measured-on-intel-arc-b580) before enabling it |
+
+> The 0.4.x inputs are **appended at the end** of the parameter list on purpose. ComfyUI
+> stores widget values positionally, so inserting them earlier would shift every value of
+> every workflow saved before the upgrade.
+
+### Llama CPP Engine
+
+`LlamaCPP` · outputs `RESPONSE`
+
+**Generation**
+
+| Input | Default | Notes |
+|---|---|---|
+| `model` / `prompt` | — | required |
+| `images` | — | single image or batch |
+| `options` | — | from the Options node |
+| `system_prompt` | empty | |
+| `response_format` | `text` | `text` or `json_object`. `json_object` reveals a `json_schema` field that constrains the output to valid JSON |
+| `max_tokens` | `2048` | raise it if the answer gets cut off |
+| `memory_cleanup` | `full_cleanup` | `close` / `backend_free` / `full_cleanup` / `persistent`. See [memory strategy](#memory-strategy) |
+| `think_display` | `hide` | `hide` returns only the text after the last `</think>`; `show` keeps the block. Handles malformed tags (missing opening, doubled closing, dangling open) |
+| `reasoning_budget` | `-1` | 0.4.x only. Caps the first `<think>` block at N tokens: `-1` = library default, `0` = close it immediately, `N` = at most N reasoning tokens |
+
+**Sampling**
+
+| Input | Default | | Input | Default |
+|---|---|---|---|---|
+| `temperature` | `0.1` | | `repeat_penalty` | `1.1` |
+| `top_p` | `0.9` | | `present_penalty` | `0.0` |
+| `top_k` | `20` | | `frequency_penalty` | `0.0` |
+| `min_p` | `0.05` | | `seed` | `1` (with control-after-generate) |
+
+### Llama CPP Memory Cleanup
+
+`LlamaCPP` · outputs `PASSTHROUGH` (the input, unchanged)
+
+| Input | Default | Notes |
+|---|---|---|
+| `memory_cleanup` | `close` | `close` / `backend_free` / `full_cleanup` / `persistent` |
+| `passthrough` | — | optional; lets you splice this node into a chain without breaking the graph |
+
+### Llama CPP Image Folder Loader
+
+`LlamaCPP/Dataset` · outputs `images` (list), `paths` (list), `count`
+
+Emits a **list**, one item per file. That is the whole point: a downstream node without
+`INPUT_IS_LIST` then runs once per image. A folder loader that emits a *tensor batch*
+instead puts every image into a single request and runs out of context on the first try.
+
+| Input | Default | Notes |
+|---|---|---|
+| `folder_path` | empty | absolute path used as-is; relative resolves under `ComfyUI/input` |
+| `extensions` | `png,jpg,jpeg,webp,bmp` | comma separated |
+| `recursive` | on | scan sub-folders |
+| `sort_order` | `natural` | `natural` (2 before 10) / `name` / `modified` / `none` |
+| `max_images` | `0` | `0` = all. Set a small number to validate the graph first |
+| `start_index` | `0` | skip the first N after sorting, to resume an interrupted run |
+| `max_side` | `0` | downscale so the longest side is at most N pixels (`0` = keep original). The cheapest lever on vision token count and base64 size; `1024` is a good captioning default |
+
+Images are EXIF-rotated upright and transparent pixels are composited onto white (not black).
+An undecodable file is skipped with a warning instead of aborting the batch.
+
+### Llama CPP Caption Saver
+
+`LlamaCPP/Dataset` · outputs `saved`, `skipped`
+
+Writes one `.txt` per caption, **next to the source image with the same stem**
+(`abc.png` → `abc.txt`) — the pairing kohya-style trainers expect. Images are never
+re-encoded or renamed.
+
+| Input | Default | Notes |
+|---|---|---|
+| `text` | — | `RESPONSE` from the engine |
+| `paths` | — | `paths` from the loader. Unconnected = numbered files (`caption_00000.txt`, ...) inside `output_dir` |
+| `output_dir` | empty | empty = beside each source image; relative resolves under `ComfyUI/input` |
+| `skip_on_error` | on | drops captions that are the engine's error string (`Error generating response: ...`). Without it a failed image silently becomes a garbage caption |
+| `skip_empty` | on | drops blank captions |
+
+Files are UTF-8 with `\n` endings and no BOM, and every write is echoed so a batch can be
+audited afterwards:
+
+```
+[llama_cpp dataset] caption saved: ...\ComfyUI_1057334871997372_.txt (223 chars)
+[llama_cpp dataset] captions: 3 saved, 0 skipped
+```
+
+---
+
+## Model discovery
+
+`.gguf` files are picked up **recursively** from:
+
+| Source | Path | Auto |
+|---|---|:--:|
+| ComfyUI text encoders | `ComfyUI/models/text_encoders/` and `ComfyUI/models/clip/` | yes |
+| Dedicated LLM folder | `ComfyUI/models/LLM/` | yes |
+| Custom folders | any path in `config.json` | no |
+
+Files are then split into two dropdowns by name:
+
+- **Model dropdown** — every `.gguf` whose filename does not contain `mmproj`
+- **mmproj dropdown** — every `.gguf` whose filename contains `mmproj`
+
+Location does not matter for `mmproj` files; only the keyword in the filename does.
+
+### Recommended layout
 
 ```
 ComfyUI/models/LLM/
-├── Qwen3.5-4B-Q4_K_M.gguf          ← LLM model
+├── Qwen3.5-4B-Q4_K_M.gguf
+├── Qwen3.5-4B-mmproj-BF16.gguf
 ├── Qwen2.5-VL-3B-instruct-q4_k_m.gguf
-├── mmproj/                          ← Vision projectors (or any name)
-│   └── Qwen2.5-VL-3B-Instruct-mmproj-f16.gguf
-└── GGUF/                            ← Can use subdirectories freely
-    └── ...
+└── mmproj/
+    └── Qwen2.5-VL-3B-Instruct-mmproj-f16.gguf
 ```
 
-`mmproj` files only need the keyword "mmproj" in their filename to appear in the mmproj dropdown — their folder location doesn't matter.
+### config.json
 
-### Custom Folders (config.json)
-
-Create `config.json` in the plugin directory for additional search paths:
+Optional. Without it the plugin only scans the ComfyUI model folders.
 
 ```json
 {
@@ -278,29 +325,171 @@ Create `config.json` in the plugin directory for additional search paths:
   ],
   "exclude_patterns": [
     "wan22",
-    "krea2"
+    "krea2",
+    "qwen_image"
   ]
 }
 ```
 
-- The `config.json` file is **optional** — the node works without it
-- Paths can be absolute or relative
-- Both Windows and Unix style paths are supported
-- Non-existent paths are automatically filtered out
-- `exclude_patterns` is **optional**: case-insensitive substrings matched against the model's path relative to its search folder. Any GGUF whose path contains one of them is hidden from **both** dropdowns (models and mmproj). Useful when a folder is shared with a diffusion / video GGUF loader — llama.cpp cannot run those files, so they only clutter the list.
-- See `config.example.json` for additional examples
+- Absolute and relative paths are both accepted; non-existent paths are filtered out silently.
+- `model_folders` is scanned in addition to the auto-detected folders, never instead of them.
+- `exclude_patterns` is a list of **case-insensitive substrings** matched against each model's
+  path relative to its search folder. Matches disappear from **both** dropdowns, models and
+  mmproj alike. Use it when `model_folders` points at a directory shared with a diffusion or
+  video loader — llama.cpp cannot run those GGUFs, they only lengthen the list.
 
-## Requirements
+See `config.example.json`.
 
-- llama-cpp-python >= 0.3.39
-  - **Intel GPU (SYCL)**: https://github.com/allanmeng/llama-cpp-python-sycl-windows
-  - **Other backends (CUDA/CPU)**: https://github.com/JamePeng/llama-cpp-python/releases
-## License
+---
 
-This project is licensed under the GNU AGPLv3 License - see the [LICENSE](LICENSE) file for details.
+## Batch captioning in practice
 
-## Repository
+### Memory strategy
 
-- **Fork (SYCL optimized)**: https://github.com/allanmeng/comfyui-sg-llama-cpp
-- **SYCL whl builds**: https://github.com/allanmeng/llama-cpp-python-sycl-windows
-- **Upstream**: https://github.com/sebagallo/comfyui-sg-llama-cpp
+| `memory_cleanup` | Behaviour | Batch captioning |
+|---|---|---|
+| `full_cleanup` | releases the model after every generation, reloads on the next one | **default.** On a 4B-class model the reload costs ~2 s per image, which is far cheaper than the alternative |
+| `persistent` | keeps the model resident between runs | measured **~26× slower** on a hybrid vision model. Prefix/KV reuse on a hybrid (recurrent) architecture carries an overhead that dwarfs the load it saves. Do not use it for tagging |
+| `close` / `backend_free` | lighter versions of the teardown | fine for one-off runs, not for batches |
+
+The loader is `not_idempotent`, so adding images to the folder is picked up without restarting
+ComfyUI.
+
+### Per-image timing
+
+Every generation prints one line, **regardless of `verbose`**:
+
+```
+[llama_cpp] image timing | load 2.20s | generate 5.72s | total 7.93s | prompt 252 tok, out 60 tok (10.5 tok/s)
+```
+
+`verbose` exists but is not usable for measuring a batch: llama.cpp prints hundreds of
+`find_slot` / per-tensor lines per image, and ComfyUI itself only reports one
+`Prompt executed in X seconds` for the whole run. This line is what makes `N images × per-image
+cost` visible.
+
+### Caption hygiene
+
+- One paragraph, one line, UTF-8, no BOM. `str.strip()` does not remove U+FEFF, so a BOM that
+  reaches the response would be written to disk — check the first bytes if a tokenizer
+  complains about an extra token at position 0.
+- Keep the language and style of your captions identical to the prompts you will use at
+  inference time. A tag list in training and a sentence at inference is one of the most
+  common reasons a LoRA underperforms.
+- Watch the unit-count, not the character count: what matters is that every *variable*
+  attribute (clothing, background, framing) is written down, so the model does not bind it to
+  the trigger word.
+
+### Recommended first run
+
+| Setting | Value | Why |
+|---|---|---|
+| `max_images` | `3` | validate the graph and read three captions before paying for the whole folder |
+| `max_side` | `1024` | a 2000 px image is ~4× the vision tokens of a 1000 px one, for no gain in caption quality |
+| `n_ctx` | `8192` | headroom for one large-image prefill plus the answer |
+| `max_tokens` | `512`–`2048` | too small and the answer is cut mid-sentence; a truncated reasoning block is worse than a short answer, so also set `reasoning_budget` |
+| `reasoning_budget` | `256`–`512` | stops thinking from eating the whole budget. Must sit **well below** `max_tokens`, otherwise the forced `</think>` is never reached |
+
+Add `sort_order = modified` if you just generated the images and want them in creation order.
+
+---
+
+## Measured on Intel Arc B580
+
+Environment: Arc B580 (12 GB, SYCL), llama-cpp-python 0.4.3, Qwen3.5-4B-Uncensored Q4_K_M,
+1792×2304 image (4032 vision tokens), `n_ctx=8192`. Numbers are single-machine; treat them as
+direction, not as a spec. Nothing here was measured on Arc B70 or on non-Intel backends.
+
+**The 0.4.x tuning knobs are not a speed-up.** `load_mode`, `lazy_mode`, `flash_attn_type` and
+`vision_flash_attn` changed `clip_encode`, prefill and decode by less than run-to-run noise
+(`clip_encode` spread ≤1.4%, ~11.0 s in every configuration). Defaults stay `auto`. They are
+exposed so that a workflow *can* pin a behaviour, not because they make it faster.
+
+**KV cache quantization works but is a net loss on small hybrid models.**
+
+| `type_k` / `type_v` | Decode | vs f16 baseline |
+|---|---|---|
+| `auto` / `auto` (f16) | **85.59 t/s** | — |
+| `q8_0` / `auto` (K only) | 82.22 t/s | −3.9% |
+| `q8_0` / `q8_0` | 79.22 t/s | −7.4% |
+| `q4_0` / `q4_0` | 78.70 t/s | −8.0% |
+
+Quantizing K only costs almost exactly half of quantizing K+V, which is the expected
+dose-response if the decode loop dequantizes the whole history on every token — so the setting
+really does reach llama.cpp. It still loses here because this model keeps KV in only 8 of its
+32 layers (the rest are recurrent), so the f16 KV cache is just ~256 MiB; saving 114 MiB is
+invisible on a 12 GB card while costing 7% of decode speed. **Keep `auto`** unless you run a
+large dense VLM or a very long context, where the cache reaches gigabytes.
+
+Two related facts that surprise people:
+
+- The `SYCL0 compute buffer size` line in the log is the **graph compute scratch buffer**, not
+  the KV cache. KV has its own allocation and is only reported by
+  `llama_kv_cache: size = ... (type): ... MiB`, which requires `verbose=true`. A KV setting
+  will never shrink the compute-buffer number.
+- The type's block size must divide the head dimension (32 divides Qwen3.5's 256). Unsupported
+  combinations are reported by llama.cpp itself, not by the plugin.
+
+**Retuned defaults** (2.3.0) apply to freshly created nodes only; existing workflows keep their
+own saved values.
+
+| Node | Parameter | Old | New |
+|---|---|---|---|
+| Options | `n_ctx` | `2048` | `8192` |
+| Engine | `memory_cleanup` | `close` | `full_cleanup` |
+| Engine | `max_tokens` | `512` | `2048` |
+| Engine | `temperature` / `top_p` / `top_k` | `0.2` / `0.95` / `40` | `0.1` / `0.9` / `20` |
+| Engine | `think_display` | `show` | `hide` |
+
+Full history and the reasoning behind each change: [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `failed to create memory slot for batch` / crash on the first decode token of a large image | `n_ctx` too small for the vision prefill (4000+ tokens) plus the first decode slot | raise `n_ctx` to `8192` or more |
+| Access violation on a large image with a hybrid model (Qwen3.5) | `ctx_checkpoints = 0` takes a buggy fast-path in llama-cpp-python | set `ctx_checkpoints = -1` |
+| `use_mmap` / `use_mlock` / `use_direct_io` appear to do nothing | removed from the 0.4.x load path | use `load_mode` instead |
+| `RESPONSE` is a truncated chunk of reasoning with no answer | the whole `max_tokens` budget was spent inside `<think>`, so `</think>` was never emitted and `hide` had nothing to strip | raise `max_tokens`, and set `reasoning_budget` well below it |
+| Every `.txt` contains `Error generating response: ...` | the engine returned its error string as text and the saver wrote it | `skip_on_error` (on by default) |
+| `control-looking token: <id> '</s>' was not control-type; this is probably a bug in the model` | the GGUF's `token_type` metadata marks `</s>` as a normal token. llama.cpp overrides the type and registers it as EOS | harmless, and it prints once per model load — which is why a 3-image batch with `full_cleanup` prints it 3 times. A GGUF re-converted with the official converter usually silences it |
+| `V cache quantization requires flash_attn` | quantized `type_v` combined with `flash_attn_type=disabled` | enable Flash Attention, or leave `type_v` at `auto` |
+| No models in the dropdown | folder not scanned, or everything matched `exclude_patterns` | see [Model discovery](#model-discovery); check the `verbose` output for the scanned roots |
+| Vision output is garbage after upgrading | new wheel installed over the old one, stale DLLs in `lib/` | uninstall first, then install — see [Installation](#installation) |
+
+---
+
+## What this fork changes
+
+| Area | Upstream | This fork |
+|---|---|---|
+| llama-cpp-python | 0.3.2x-era vision handlers | **0.3.39+ MTMD**: `GenericMTMDChatHandler`, `mmproj_path` passed straight to `Llama()` |
+| Parameter passing | fixed kwarg list | whitelist derived from the installed `Llama()` signature — 0.3.x and 0.4.x share one code path |
+| 0.4.x knobs | not exposed | `load_mode`, `lazy_mode`, `flash_attn_type`, `vision_flash_attn`, `type_k` / `type_v` |
+| Reasoning output | passed through verbatim | `think_display` (`hide` / `show`), robust against malformed tags, plus `reasoning_budget` on 0.4.x |
+| Defaults | `n_ctx 2048`, `memory_cleanup close`, `max_tokens 512` | retuned on B580: `8192` / `full_cleanup` / `2048` |
+| Vision token bounds | inconsistent bounds abort the run | invalid bound dropped with a warning |
+| Model folders | `model_folders` | plus `exclude_patterns` |
+| Measuring a run | `verbose` only | per-image timing line, independent of `verbose` |
+| Batch captioning | — | `LlamaCPP/Dataset`: folder loader + caption saver |
+
+Feelers, bug reports and PRs that make the SYCL path better are welcome. This is a fork of
+[sebagallo/comfyui-sg-llama-cpp](https://github.com/sebagallo/comfyui-sg-llama-cpp); upstream
+fixes are tracked and merged where they apply.
+
+---
+
+## License and links
+
+Licensed under the **GNU AGPLv3** — see [LICENSE](LICENSE). Being a fork of an AGPLv3 project,
+this fork stays AGPLv3.
+
+| | |
+|---|---|
+| This fork (SYCL tuned) | https://github.com/allanmeng/comfyui-sg-llama-cpp |
+| SYCL wheels for Windows | https://github.com/allanmeng/llama-cpp-python-sycl-windows |
+| Other wheels (CUDA / CPU) | https://github.com/JamePeng/llama-cpp-python/releases |
+| Upstream plugin | https://github.com/sebagallo/comfyui-sg-llama-cpp |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
