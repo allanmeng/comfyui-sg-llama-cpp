@@ -102,9 +102,9 @@ Model Loader.
 
 ![Single-image prompt reversal workflow](assets/workflow_single_image.png)
 
-Five nodes, four roles. `Load Image` supplies `IMAGE`, the Model Loader supplies `MODEL`, Options
-supplies `OPTIONS`, and all three converge on the Engine; the Engine's `RESPONSE` then feeds a
-display node. Drop any one of the three lines and nothing runs — in particular, with
+Five nodes. `Load Image` supplies `IMAGE`, the Model Loader supplies `MODEL`, Options supplies
+`OPTIONS`, and all three converge on the Engine; the Engine's `RESPONSE` then feeds a display
+node. Drop any one of the three lines and nothing runs — in particular, with
 `mmproj_model_name` empty, `images` is silently ignored: the output looks fine while the model is
 answering without ever having seen the picture.
 

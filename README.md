@@ -99,7 +99,7 @@ Model Loader 里那两个下拉框。
 
 ![单图提示词反推工作流](assets/workflow_single_image.png)
 
-图里五个节点、四类角色：`Load Image` 出 `IMAGE`，Model Loader 出 `MODEL`，Options 出
+图里五个节点：`Load Image` 出 `IMAGE`，Model Loader 出 `MODEL`，Options 出
 `OPTIONS`，三条线一起汇进 Engine，Engine 的 `RESPONSE` 再接一个显示节点。缺任何一条都跑不
 起来 —— 尤其 `mmproj_model_name` 空着的时候，`images` 会被静默忽略，输出看着正常，实际是在
 没看图的情况下作答。
